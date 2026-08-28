@@ -225,7 +225,14 @@ class MainWindow(QMainWindow):
     def _on_master_loaded(self, df):
         self.master_df = df
         self._set_busy(False)
-        self._set_data_status(f"✅ Reference data ready\n{len(df):,} master rows loaded", "ready")
+        status = remote.LAST_STATUS.get("master_clean.xlsx", "downloaded")
+        note = {
+            "up-to-date": "cached · up to date",
+            "updated": "updated from repo",
+            "downloaded": "downloaded",
+            "offline-cache": "offline · using cached copy",
+        }.get(status, status)
+        self._set_data_status(f"✅ Reference data ready\n{len(df):,} master rows ({note})", "ready")
         self.statusBar().showMessage("Reference data ready — open a file to validate.", 8000)
         if self.user_df is not None:
             self.run_validation()
