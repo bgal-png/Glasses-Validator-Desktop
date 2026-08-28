@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 import remote
 import updater
 import rules
+import template
 import validator_core as vc
 from fill_dialog import FillDialog
 from model import ValidationTableModel, IssueFilterProxy, ERROR_BG, WARNING_BG
@@ -192,6 +193,13 @@ class MainWindow(QMainWindow):
         self.chk_undecided = QCheckBox("Flag cells a rule can't determine")
         self.chk_undecided.toggled.connect(lambda: self.run_validation() if self.user_df is not None else None)
         fl.addWidget(self.chk_undecided)
+        self.chk_template = QCheckBox("Save/export with template headers")
+        self.chk_template.setChecked(bool(template.template_path()))
+        self.chk_template.setEnabled(bool(template.template_path()))
+        self.chk_template.setToolTip(
+            "Write the file using header_template.xlsx so the header row keeps "
+            "its exact colours, fonts, wrapping, row height and column widths.")
+        fl.addWidget(self.chk_template)
         btn_next = QPushButton("⏭ Jump to next issue"); btn_next.clicked.connect(self.jump_next_issue)
         fl.addWidget(btn_next)
         lay.addWidget(grp_f)
@@ -482,10 +490,15 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.user_df.to_excel(path, index=False)
+            if self.chk_template.isChecked() and template.template_path():
+                _p, _n, un = template.save_with_template(self.user_df, path)
+                note = f" (template headers{'; ' + str(len(un)) + ' extra col(s)' if un else ''})"
+            else:
+                self.user_df.to_excel(path, index=False)
+                note = ""
             self._dirty = False
             self.setWindowTitle(self._base_title())
-            self.statusBar().showMessage(f"Saved → {path}", 8000)
+            self.statusBar().showMessage(f"Saved → {path}{note}", 8000)
         except Exception as e:
             self._error("Save failed", str(e))
 
@@ -496,8 +509,14 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            export_annotated(self.user_df, self.result["cell_issues"], path)
-            self.statusBar().showMessage(f"Exported → {path}", 8000)
+            if self.chk_template.isChecked() and template.template_path():
+                template.save_with_template(self.user_df, path,
+                                            cell_issues=self.result["cell_issues"])
+                note = " (template headers)"
+            else:
+                export_annotated(self.user_df, self.result["cell_issues"], path)
+                note = ""
+            self.statusBar().showMessage(f"Exported → {path}{note}", 8000)
         except Exception as e:
             self._error("Export failed", str(e))
 

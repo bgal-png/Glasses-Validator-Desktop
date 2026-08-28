@@ -7,7 +7,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[("header_template.xlsx", ".")],
     hiddenimports=["openpyxl"],
     hookspath=[],
     hooksconfig={},
