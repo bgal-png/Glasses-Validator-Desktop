@@ -1,6 +1,6 @@
 """Qt table model that renders the user's spreadsheet and colours flagged cells."""
 from __future__ import annotations
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Signal
 from PySide6.QtGui import QColor
 
 ERROR_BG = QColor("#ffb3b3")     # red-ish
@@ -9,6 +9,8 @@ ERROR_TYPES = {"empty_required", "empty_required_sun", "meta_format", "invalid_c
 
 
 class ValidationTableModel(QAbstractTableModel):
+    edited = Signal()   # emitted whenever a cell value is changed
+
     def __init__(self, df, cell_issues=None):
         super().__init__()
         self._df = df.reset_index(drop=True)
@@ -51,6 +53,28 @@ class ValidationTableModel(QAbstractTableModel):
                     lines.append(f"    Expected: {i['expected']}")
             return "\n".join(lines)
         return None
+
+    # ---- editing ----
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.NoItemFlags
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role != Qt.EditRole or not index.isValid():
+            return False
+        row, col = index.row(), index.column()
+        new = "" if value is None else str(value)
+        old = self._df.iat[row, col]
+        old = "" if old is None or str(old) == "nan" else str(old)
+        if new == old:
+            return False
+        self._df.iat[row, col] = new
+        # This cell's issues are stale until the next validation pass
+        self._cell_issues.pop((row, self._cols[col]), None)
+        self.dataChanged.emit(index, index)
+        self.edited.emit()
+        return True
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:

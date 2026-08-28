@@ -93,6 +93,42 @@ def _visible_ws(raw_val: str) -> str:
     return raw_val.replace(" ", "[NBSP]").replace("\t", "[TAB]")
 
 
+def fix_spacing_value(raw: str) -> str:
+    """Normalise the whitespace problems the validator flags:
+    NBSP/zero-width -> normal space, collapse runs of whitespace, tidy spaces
+    around the '|' separator, and trim the ends."""
+    s = raw
+    # Exotic whitespace -> plain space (NBSP, zero-width space, BOM)
+    s = s.replace(" ", " ").replace("​", " ").replace("﻿", " ")
+    s = s.replace("\t", " ")
+    # Collapse any run of whitespace to a single space
+    s = re.sub(r"\s{2,}", " ", s)
+    # No spaces around the pipe separator
+    s = re.sub(r"\s*\|\s*", "|", s)
+    return s.strip()
+
+
+def fix_spacing(user_df: pd.DataFrame):
+    """Apply fix_spacing_value to every cell. Returns (new_df, changes) where
+    changes is a list of (row_idx, col_name, before, after)."""
+    df = user_df.copy()
+    changes = []
+    for col in df.columns:
+        series = df[col]
+        for row_idx in range(len(df)):
+            v = series.iat[row_idx]
+            if v is None:
+                continue
+            raw = str(v)
+            if raw.lower() in _EMPTY:
+                continue
+            fixed = fix_spacing_value(raw)
+            if fixed != raw:
+                changes.append((row_idx, col, raw, fixed))
+                df.iat[row_idx, df.columns.get_loc(col)] = fixed
+    return df, changes
+
+
 def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
     """Run the full Tab-1 validation.
 

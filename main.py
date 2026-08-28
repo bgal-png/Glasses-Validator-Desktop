@@ -78,6 +78,8 @@ class MainWindow(QMainWindow):
         self._issue_cells = []
         self._issue_pos = -1
         self._worker = None
+        self._dirty = False
+        self._current_name = None
         self.settings = QSettings("Alensa", "GlassesValidator")
 
         # ---- central table ----
@@ -90,7 +92,6 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_side_panel()
         self._build_statusbar()
-        self.table.selectionModel().currentChanged.connect(self._on_cell_selected)
 
         # Apply saved theme
         dark = self.settings.value("dark_mode", False, type=bool)
@@ -106,6 +107,8 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         act_open = QAction("📂 Open file", self); act_open.triggered.connect(self.open_file); tb.addAction(act_open)
         act_reval = QAction("🔁 Re-validate", self); act_reval.triggered.connect(self.run_validation); tb.addAction(act_reval)
+        act_fix = QAction("🧹 Fix all spacing", self); act_fix.triggered.connect(self.fix_spacing); tb.addAction(act_fix)
+        act_save = QAction("💾 Save changes", self); act_save.triggered.connect(self.save_file); tb.addAction(act_save)
         tb.addSeparator()
         act_refresh = QAction("☁️ Refresh data", self); act_refresh.triggered.connect(self.refresh_data); tb.addAction(act_refresh)
         act_export = QAction("💾 Export annotated", self); act_export.triggered.connect(self.export_file); tb.addAction(act_export)
@@ -260,7 +263,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._error("Could not read file", str(e)); return
         self._current_path = path
-        self.setWindowTitle(f"Glasses Import Validator (Desktop) v{__version__} — {path.split('/')[-1]}")
+        self._current_name = path.replace("\\", "/").split("/")[-1]
+        self._dirty = False
+        self.setWindowTitle(self._base_title())
         self.run_validation()
 
     def run_validation(self):
@@ -279,7 +284,11 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self.result = result
         self.model = ValidationTableModel(self.user_df, result["cell_issues"])
+        # The model edits this DataFrame in place, so keep the same object.
+        self.user_df = self.model.dataframe()
+        self.model.edited.connect(self._on_model_edited)
         self.proxy.setSourceModel(self.model)
+        self.table.selectionModel().currentChanged.connect(self._on_cell_selected)
         self.proxy.set_only_issues(self.chk_only.isChecked())
         self.table.resizeColumnsToContents()
         self._issue_cells = sorted(result["cell_issues"].keys())
@@ -345,6 +354,50 @@ class MainWindow(QMainWindow):
             self.table.setCurrentIndex(pidx)
             self.table.scrollTo(pidx)
 
+    def fix_spacing(self):
+        """One-click cleanup of leading/trailing/double spaces, NBSP and
+        spaces around the '|' separator, across the whole sheet."""
+        if self.user_df is None:
+            QMessageBox.information(self, "No file", "Open an Excel file first."); return
+        fixed_df, changes = vc.fix_spacing(self.user_df)
+        if not changes:
+            QMessageBox.information(self, "Nothing to fix", "No spacing issues found.")
+            return
+        cols = sorted({c for _r, c, _b, _a in changes})
+        msg = (f"Fix {len(changes)} cell(s) across {len(cols)} column(s)?\n\n"
+               "This trims leading/trailing spaces, collapses double spaces,\n"
+               "replaces non-breaking spaces, and tidies spaces around '|'.")
+        if QMessageBox.question(self, "Fix all spacing", msg) != QMessageBox.Yes:
+            return
+        self.user_df = fixed_df
+        self._dirty = True
+        self.statusBar().showMessage(f"Fixed spacing in {len(changes)} cell(s) — re-validating…", 5000)
+        self.run_validation()
+
+    def _on_model_edited(self):
+        self._dirty = True
+        self.setWindowTitle(self._base_title() + " •")
+
+    def _base_title(self):
+        name = f" — {self._current_name}" if getattr(self, "_current_name", None) else ""
+        return f"Glasses Import Validator (Desktop) v{__version__}{name}"
+
+    def save_file(self):
+        """Write the edited table back to .xlsx (plain values, no highlighting)."""
+        if self.user_df is None:
+            QMessageBox.information(self, "No file", "Open an Excel file first."); return
+        default = getattr(self, "_current_path", "edited.xlsx")
+        path, _ = QFileDialog.getSaveFileName(self, "Save edited file", default, "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            self.user_df.to_excel(path, index=False)
+            self._dirty = False
+            self.setWindowTitle(self._base_title())
+            self.statusBar().showMessage(f"Saved → {path}", 8000)
+        except Exception as e:
+            self._error("Save failed", str(e))
+
     def export_file(self):
         if self.result is None:
             QMessageBox.information(self, "Nothing to export", "Validate a file first."); return
@@ -383,6 +436,18 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Update", "Automatic update only works in the packaged .exe.")
 
     # ---------- misc ----------
+    def closeEvent(self, event):
+        if self._dirty:
+            r = QMessageBox.question(
+                self, "Unsaved changes",
+                "You have unsaved edits. Save before closing?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+            if r == QMessageBox.Cancel:
+                event.ignore(); return
+            if r == QMessageBox.Save:
+                self.save_file()
+        event.accept()
+
     def _error(self, title, detail):
         self.statusBar().showMessage(title, 6000)
         QMessageBox.critical(self, title, str(detail))
