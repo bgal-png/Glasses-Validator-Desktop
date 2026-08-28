@@ -257,6 +257,11 @@ def make_private_name_rule(eye="", sun="", comp=""):
     return rule
 
 
+# Rules left unticked in the Fill dialog by default — these derive values from
+# the product name/brand, which is usually already correct in the file, so
+# re-deriving them is opt-in.
+DEFAULT_OFF = {"producing", "model", "color_code"}
+
 # id, label, target logical column, function, source description
 RULES = [
     ("hs_code",     "HS Code",           "hs_code",    r_hs_code,           "Glasses type + main material"),

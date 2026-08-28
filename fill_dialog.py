@@ -52,7 +52,7 @@ class FillDialog(QDialog):
         gl.addWidget(QLabel("<b>Source</b>"), 0, 3)
         self._count_labels = {}
         for r, (rid, label, _tk, _fn, src) in enumerate(rules.RULES, start=1):
-            cb = QCheckBox(label); cb.setChecked(True)
+            cb = QCheckBox(label); cb.setChecked(rid not in rules.DEFAULT_OFF)
             self._boxes[rid] = cb
             lf = QLabel("—"); ld = QLabel("—")
             self._count_labels[rid] = (lf, ld)
