@@ -7,7 +7,7 @@ a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[("header_template.xlsx", ".")],
+    datas=[("header_template.xlsx", "."), ("app_icon.ico", ".")],
     hiddenimports=["openpyxl"],
     hookspath=[],
     hooksconfig={},
@@ -34,5 +34,5 @@ exe = EXE(
     upx=True,
     runtime_tmpdir=None,
     console=False,   # windowed app, no console
-    icon=None,
+    icon="app_icon.ico",
 )

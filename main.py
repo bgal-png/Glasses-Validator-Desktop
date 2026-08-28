@@ -6,11 +6,12 @@ the reason, and use the side panel to filter, jump between issues, refresh the
 reference data, or export an annotated .xlsx.
 """
 from __future__ import annotations
+import os
 import sys
 import pandas as pd
 
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QModelIndex, QSettings
-from PySide6.QtGui import QAction, QColor, QPalette
+from PySide6.QtGui import QAction, QColor, QPalette, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QCheckBox, QFileDialog, QMessageBox,
@@ -636,6 +637,9 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle(QStyleFactory.create("Fusion"))
+    icon_path = template.resource_path("app_icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
