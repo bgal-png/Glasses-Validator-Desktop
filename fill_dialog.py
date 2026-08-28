@@ -133,7 +133,12 @@ class FillDialog(QDialog):
         self.lbl_summary.setText(f"Will change {total} cell(s){extra}")
 
     def selected_rule_ids(self):
-        return {rid for rid, cb in self._boxes.items() if cb.isChecked()}
+        sel = {rid for rid, cb in self._boxes.items() if cb.isChecked()}
+        # The Name private rule has its own checkbox, not one of the per-rule
+        # boxes — include it so apply_rules()' rule_ids filter keeps it.
+        if self.chk_pn.isChecked():
+            sel.add("private_name")
+        return sel
 
     def overwrite(self):
         return self.chk_overwrite.isChecked()
