@@ -22,8 +22,10 @@ import remote
 import updater
 import rules
 import template
+import headers
 import validator_core as vc
 from fill_dialog import FillDialog
+from header_dialog import HeaderFixDialog
 from tabs import (ImageCheckerTab, BannedBrandsTab, ImageRenamerTab,
                   SyntaxDuplicatesTab)
 from model import ValidationTableModel, IssueFilterProxy, ERROR_BG, WARNING_BG
@@ -131,6 +133,7 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         act_open = QAction("📂 Open file", self); act_open.triggered.connect(self.open_file); tb.addAction(act_open)
         act_reval = QAction("🔁 Re-validate", self); act_reval.triggered.connect(self.run_validation); tb.addAction(act_reval)
+        act_hdr = QAction("🏷 Fix headers", self); act_hdr.triggered.connect(self.fix_headers); tb.addAction(act_hdr)
         act_fix = QAction("🧹 Fix all spacing", self); act_fix.triggered.connect(self.fix_spacing); tb.addAction(act_fix)
         act_fill = QAction("🪄 Fill columns", self); act_fill.triggered.connect(self.fill_columns); tb.addAction(act_fill)
         act_del = QAction("🗑 Delete rows", self); act_del.triggered.connect(self.delete_selected_rows); tb.addAction(act_del)
@@ -424,6 +427,33 @@ class MainWindow(QMainWindow):
         if pidx.isValid():
             self.table.setCurrentIndex(pidx)
             self.table.scrollTo(pidx)
+
+    def fix_headers(self):
+        """Rename wrongly-named columns to match the import template."""
+        if self.user_df is None:
+            QMessageBox.information(self, "No file", "Open an Excel file first."); return
+        try:
+            proposals, un_tpl, un_file = headers.propose_fixes(list(self.user_df.columns))
+        except Exception as e:
+            self._error("Could not read the template", str(e)); return
+        if not proposals:
+            QMessageBox.information(
+                self, "Headers look fine",
+                "Every column header already matches the template."
+                + (f"\n\nTemplate columns missing from the file: {', '.join(un_tpl)}"
+                   if un_tpl else ""))
+            return
+        dlg = HeaderFixDialog(proposals, un_file, un_tpl, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        chosen = dlg.accepted_proposals()
+        if not chosen:
+            return
+        self.user_df, n = headers.apply_fixes(self.user_df, chosen)
+        self._dirty = True
+        self.statusBar().showMessage(f"Renamed {n} header(s) — re-validating…", 5000)
+        self._push_dataframe_to_tabs()
+        self.run_validation()
 
     def fix_spacing(self):
         """One-click cleanup of leading/trailing/double spaces, NBSP and
