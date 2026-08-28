@@ -54,6 +54,17 @@ def _plain(html):
     return re.sub(r"<[^>]+>", "", html)
 
 
+IMAGE_FILTER = ("Images (*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tif *.tiff "
+                "*.avif *.jfif);;All files (*)")
+
+
+def pick_directory(parent, caption):
+    """Folder picker that also LISTS the files inside, so a folder full of
+    images doesn't look empty (Windows' folder mode hides files by default)."""
+    return QFileDialog.getExistingDirectory(
+        parent, caption, "", QFileDialog.Option(0))
+
+
 def _scan_and_describe(folder, recursive):
     """Scan for images and build a human explanation of what was found —
     so "0 images" says why rather than leaving you guessing."""
@@ -119,11 +130,15 @@ class ImageCheckerTab(BaseTab):
         row = QHBoxLayout()
         self.btn_folder = QPushButton("📁 Select image folder…")
         self.btn_folder.clicked.connect(self.pick_folder)
+        self.btn_files = QPushButton("🖼 Select image files…")
+        self.btn_files.clicked.connect(self.pick_files)
         self.chk_recursive = QCheckBox("include subfolders"); self.chk_recursive.setChecked(True)
-        self.lbl_folder = QLabel("<i>no folder selected</i>")
-        row.addWidget(self.btn_folder); row.addWidget(self.chk_recursive)
-        row.addWidget(self.lbl_folder, 1)
+        row.addWidget(self.btn_folder); row.addWidget(self.btn_files)
+        row.addWidget(self.chk_recursive); row.addStretch(1)
         lay.addLayout(row)
+        self.lbl_folder = QLabel("<i>no images selected</i>")
+        self.lbl_folder.setWordWrap(True)
+        lay.addWidget(self.lbl_folder)
 
         self.paste = QPlainTextEdit()
         self.paste.setPlaceholderText(
@@ -149,7 +164,7 @@ class ImageCheckerTab(BaseTab):
         self._files = []
 
     def pick_folder(self):
-        d = QFileDialog.getExistingDirectory(self, "Select folder with images")
+        d = pick_directory(self, "Select the folder containing the images")
         if not d:
             return
         self._folder = d
@@ -160,6 +175,16 @@ class ImageCheckerTab(BaseTab):
                                 f"{d}\n\n{_plain(msg)}\n\n"
                                 "If the images are in subfolders, tick "
                                 "'include subfolders'.")
+
+    def pick_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select the image files", "", IMAGE_FILTER)
+        if not files:
+            return
+        self._folder = None
+        self._files = files
+        self.lbl_folder.setText(f"<b>{len(files)} file(s) selected</b><br>"
+                                f"{os.path.dirname(files[0])}")
 
     def _image_names(self):
         names = list(self._files)
@@ -314,7 +339,7 @@ class ImageRenamerTab(BaseTab):
         self._plan = []
 
     def pick_src(self):
-        d = QFileDialog.getExistingDirectory(self, "Folder with the images to rename")
+        d = pick_directory(self, "Folder with the images to rename")
         if d:
             self._src = d
             files, msg = _scan_and_describe(d, False)
@@ -323,7 +348,7 @@ class ImageRenamerTab(BaseTab):
                 QMessageBox.warning(self, "No images found", f"{d}\n\n{_plain(msg)}")
 
     def pick_out(self):
-        d = QFileDialog.getExistingDirectory(self, "Where to write the renamed images")
+        d = pick_directory(self, "Where to write the renamed images")
         if d:
             self._out = d
             self.lbl_out.setText(f"<b>{d}</b>")
