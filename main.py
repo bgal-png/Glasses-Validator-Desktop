@@ -252,7 +252,11 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.user_df = pd.read_excel(path, dtype=str, header=0).reset_index(drop=True)
+            df = pd.read_excel(path, dtype=str, header=0).reset_index(drop=True)
+            # Normalise headers the same way the validator does, so the grid
+            # column names match the keys used for cell issues (headers in these
+            # files often contain line breaks / double spaces).
+            self.user_df = vc.clean_headers(df)
         except Exception as e:
             self._error("Could not read file", str(e)); return
         self._current_path = path
