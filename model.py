@@ -76,6 +76,21 @@ class ValidationTableModel(QAbstractTableModel):
         self.edited.emit()
         return True
 
+    def remove_rows(self, rows):
+        """Delete the given source row indices. Highlights are dropped because
+        row numbers shift; the caller should re-validate."""
+        drop = set(rows)
+        if not drop:
+            return 0
+        keep = [i for i in range(len(self._df)) if i not in drop]
+        self.beginResetModel()
+        self._df = self._df.iloc[keep].reset_index(drop=True)
+        self._cell_issues = {}
+        self._rows_with_issues = set()
+        self.endResetModel()
+        self.edited.emit()
+        return len(drop)
+
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
             return None

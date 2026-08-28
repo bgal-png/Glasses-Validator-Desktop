@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QCheckBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory, QDialog,
+    QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory, QDialog, QMenu,
 )
 
 import remote
@@ -89,6 +89,8 @@ class MainWindow(QMainWindow):
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_context_menu)
         self.setCentralWidget(self.table)
 
         self._build_toolbar()
@@ -111,6 +113,7 @@ class MainWindow(QMainWindow):
         act_reval = QAction("🔁 Re-validate", self); act_reval.triggered.connect(self.run_validation); tb.addAction(act_reval)
         act_fix = QAction("🧹 Fix all spacing", self); act_fix.triggered.connect(self.fix_spacing); tb.addAction(act_fix)
         act_fill = QAction("🪄 Fill columns", self); act_fill.triggered.connect(self.fill_columns); tb.addAction(act_fill)
+        act_del = QAction("🗑 Delete rows", self); act_del.triggered.connect(self.delete_selected_rows); tb.addAction(act_del)
         act_save = QAction("💾 Save changes", self); act_save.triggered.connect(self.save_file); tb.addAction(act_save)
         tb.addSeparator()
         act_refresh = QAction("☁️ Refresh data", self); act_refresh.triggered.connect(self.refresh_data); tb.addAction(act_refresh)
@@ -392,6 +395,47 @@ class MainWindow(QMainWindow):
         self.user_df = fixed_df
         self._dirty = True
         self.statusBar().showMessage(f"Fixed spacing in {len(changes)} cell(s) — re-validating…", 5000)
+        self.run_validation()
+
+    def _selected_source_rows(self):
+        """Source-model row indices covered by the current selection."""
+        sm = self.table.selectionModel()
+        if sm is None:
+            return []
+        rows = {self.proxy.mapToSource(i).row() for i in sm.selectedIndexes()}
+        return sorted(rows)
+
+    def _table_context_menu(self, pos):
+        if self.model is None:
+            return
+        rows = self._selected_source_rows()
+        menu = QMenu(self)
+        act = menu.addAction(f"🗑 Delete {len(rows)} selected row(s)" if rows
+                             else "🗑 Delete selected row(s)")
+        act.setEnabled(bool(rows))
+        act.triggered.connect(self.delete_selected_rows)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def delete_selected_rows(self):
+        if self.model is None:
+            QMessageBox.information(self, "No file", "Open an Excel file first."); return
+        rows = self._selected_source_rows()
+        if not rows:
+            QMessageBox.information(self, "No selection",
+                                    "Select the row(s) to delete first "
+                                    "(click the row numbers on the left).")
+            return
+        excel_rows = ", ".join(str(r + 2) for r in rows[:12]) + (" …" if len(rows) > 12 else "")
+        if QMessageBox.question(
+                self, "Delete rows",
+                f"Delete {len(rows)} row(s)?\n\nExcel row(s): {excel_rows}"
+                "\n\nThis only changes the table in the app — use "
+                "'Save changes' to write it to a file.") != QMessageBox.Yes:
+            return
+        n = self.model.remove_rows(rows)
+        self.user_df = self.model.dataframe()
+        self._dirty = True
+        self.statusBar().showMessage(f"Deleted {n} row(s) — re-validating…", 5000)
         self.run_validation()
 
     def fill_columns(self):
