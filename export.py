@@ -7,7 +7,7 @@ from openpyxl.utils import get_column_letter
 
 ERROR_FILL = PatternFill(start_color="FFB3B3", end_color="FFB3B3", fill_type="solid")
 WARNING_FILL = PatternFill(start_color="FFE08A", end_color="FFE08A", fill_type="solid")
-ERROR_TYPES = {"empty_required", "empty_required_sun", "meta_format", "invalid_content"}
+ERROR_TYPES = {"empty_required", "empty_required_sun", "meta_format", "invalid_content", "duplicate"}
 
 
 def export_annotated(user_df, cell_issues, out_path):

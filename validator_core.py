@@ -223,6 +223,38 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
                 if str(row[u_col]).strip().lower() in _EMPTY:
                     add(idx, u_col, "empty_required_sun", "error", "Empty required field (Sunglasses)")
 
+    # ---- Duplicate check (Barcode + Glasses name, within this file) ----
+    dup_cols = []
+    for kw in ("Barcode", "Glasses name"):
+        c = next((x for x in user_cols if kw.lower() in x.lower()), None)
+        if c and c not in dup_cols:
+            dup_cols.append(c)
+
+    for col in dup_cols:
+        # Compare on the trimmed value so stray spaces don't hide a duplicate;
+        # barcodes additionally compare on digits only (they often carry NBSP).
+        norm = {}
+        for idx, val in user_df[col].items():
+            raw = str(val)
+            if raw.strip().lower() in _EMPTY:
+                continue
+            key = raw.strip()
+            if "barcode" in col.lower():
+                digits = re.sub(r"\D", "", key)
+                key = digits or key
+            norm.setdefault(key.lower(), []).append(idx)
+
+        for key, rows in norm.items():
+            if len(rows) < 2:
+                continue
+            others = [r + 2 for r in rows]
+            for idx in rows:
+                mates = [r for r in others if r != idx + 2]
+                add(idx, col, "duplicate", "error",
+                    f"Duplicate in {col} ({len(rows)}x)",
+                    Value=str(user_df.at[idx, col]).strip(),
+                    Expected=f"unique — also in row(s) {', '.join(map(str, mates))}")
+
     # ---- Whitespace check (all columns) ----
     for idx, row in user_df.iterrows():
         for u_col in user_cols:
@@ -260,6 +292,7 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
     counts = {
         "empty": sum(1 for i in issues if i["type"].startswith("empty")),
         "meta_format": sum(1 for i in issues if i["type"] == "meta_format"),
+        "duplicate": sum(1 for i in issues if i["type"] == "duplicate"),
         "whitespace": sum(1 for i in issues if i["type"] == "whitespace"),
         "invalid": sum(1 for i in issues if i["type"] == "invalid_content"),
         "case_mismatch": sum(1 for i in issues if i["type"] == "case_mismatch"),

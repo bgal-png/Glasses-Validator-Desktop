@@ -161,8 +161,10 @@ class MainWindow(QMainWindow):
         self.lbl_rows = QLabel("—"); self.lbl_total = QLabel("—")
         self.lbl_empty = QLabel("—"); self.lbl_invalid = QLabel("—")
         self.lbl_case = QLabel("—"); self.lbl_ws = QLabel("—"); self.lbl_meta = QLabel("—")
+        self.lbl_dup = QLabel("—")
         rows = [("Rows", self.lbl_rows), ("Total issues", self.lbl_total),
                 ("Empty required", self.lbl_empty), ("Invalid values", self.lbl_invalid),
+                ("Duplicates", self.lbl_dup),
                 ("Case mismatch", self.lbl_case), ("Whitespace", self.lbl_ws),
                 ("Meta format", self.lbl_meta)]
         for i, (name, lbl) in enumerate(rows):
@@ -303,6 +305,7 @@ class MainWindow(QMainWindow):
         self.lbl_total.setText(str(c["total"]))
         self.lbl_empty.setText(str(c["empty"]))
         self.lbl_invalid.setText(str(c["invalid"]))
+        self.lbl_dup.setText(str(c.get("duplicate", 0)))
         self.lbl_case.setText(str(c["case_mismatch"]))
         self.lbl_ws.setText(str(c["whitespace"]))
         self.lbl_meta.setText(str(c["meta_format"]))

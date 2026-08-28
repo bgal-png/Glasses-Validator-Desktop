@@ -5,7 +5,7 @@ from PySide6.QtGui import QColor
 
 ERROR_BG = QColor("#ffb3b3")     # red-ish
 WARNING_BG = QColor("#ffe08a")   # amber
-ERROR_TYPES = {"empty_required", "empty_required_sun", "meta_format", "invalid_content"}
+ERROR_TYPES = {"empty_required", "empty_required_sun", "meta_format", "invalid_content", "duplicate"}
 
 
 class ValidationTableModel(QAbstractTableModel):
