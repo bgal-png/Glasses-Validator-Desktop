@@ -53,11 +53,27 @@ The app appears at `dist/GlassesValidator.exe` — a single file you can share.
   if newer, it offers to download the `.exe` asset and relaunch.
 
 ### Publishing a new version
-1. Bump `__version__` in `version.py` (e.g. `1.0.1`).
-2. Build the exe (above).
-3. Create a GitHub Release on `Glasses-Validator-Desktop` with tag `v1.0.1` and
-   attach `dist/GlassesValidator.exe` as an asset.
-4. Users get the update prompt on their next launch.
+
+GitHub Actions does the build and the release — you only push a tag:
+
+```bash
+# 1. bump __version__ in version.py, e.g. to 1.0.1, and commit it
+git commit -am "Release v1.0.1"
+git tag v1.0.1
+git push origin main --tags
+```
+
+The workflow (`.github/workflows/release.yml`) then builds the exe on a Windows
+runner, smoke-tests that it launches, and publishes the release with the exe
+attached. Users get the update prompt on their next launch.
+
+The tag must match `version.py` — the workflow fails loudly if it doesn't,
+because the updater compares the running version to the release tag.
+
+To get a test build without releasing anything: **Actions → Build and release →
+Run workflow**, then download the `GlassesValidator-exe` artifact.
+
+Building locally still works (see above) if you'd rather not wait for CI.
 
 ## First-time GitHub setup
 This repo (`Glasses-Validator-Desktop`) doesn't exist yet — create it, then:
