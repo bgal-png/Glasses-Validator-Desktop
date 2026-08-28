@@ -8,7 +8,8 @@ from pathlib import Path
 
 import banned_brands
 
-IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif",
+              ".tif", ".tiff", ".avif", ".jfif")
 _EMPTY = ("nan", "", "none")
 
 
@@ -69,10 +70,34 @@ def check_images(user_df, name_col, image_names):
 
 def collect_images(folder, recursive=True):
     """All image files under a folder."""
+    return scan_folder(folder, recursive)["images"]
+
+
+def scan_folder(folder, recursive=True):
+    """Scan a folder and report what was found, so an empty result can explain
+    itself: {'images', 'skipped', 'ext_counts', 'error'}."""
     p = Path(folder)
-    it = p.rglob("*") if recursive else p.glob("*")
-    return sorted(str(f) for f in it
-                  if f.is_file() and f.suffix.lower() in IMAGE_EXTS)
+    images, skipped = [], []
+    ext_counts = Counter()
+    error = None
+    try:
+        it = p.rglob("*") if recursive else p.glob("*")
+        for f in it:
+            try:
+                if not f.is_file():
+                    continue
+            except OSError:
+                continue
+            ext = f.suffix.lower()
+            ext_counts[ext or "(no extension)"] += 1
+            if ext in IMAGE_EXTS:
+                images.append(str(f))
+            else:
+                skipped.append(str(f))
+    except Exception as e:  # unreadable path, permissions, …
+        error = str(e)
+    return {"images": sorted(images), "skipped": skipped,
+            "ext_counts": dict(ext_counts), "error": error}
 
 
 # --------------------------------------------------------------------------

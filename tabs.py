@@ -4,6 +4,7 @@ DataFrame via set_dataframe().
 """
 from __future__ import annotations
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -47,6 +48,30 @@ def _table(headers, rows, stretch_last=True):
     if stretch_last:
         t.horizontalHeader().setStretchLastSection(True)
     return t
+
+
+def _plain(html):
+    return re.sub(r"<[^>]+>", "", html)
+
+
+def _scan_and_describe(folder, recursive):
+    """Scan for images and build a human explanation of what was found —
+    so "0 images" says why rather than leaving you guessing."""
+    rep = checks.scan_folder(folder, recursive)
+    imgs = rep["images"]
+    if rep["error"]:
+        return imgs, f"<span style='color:#b30000'>Could not read folder: {rep['error']}</span>"
+    if imgs:
+        extra = f" · {len(rep['skipped'])} non-image file(s) ignored" if rep["skipped"] else ""
+        return imgs, f"{len(imgs)} image(s) found{extra}"
+    total = sum(rep["ext_counts"].values())
+    if total == 0:
+        return imgs, ("<span style='color:#a06f00'>Folder is empty"
+                      + ("" if recursive else " (subfolders not searched)") + "</span>")
+    seen = ", ".join(f"{e} ×{n}" for e, n in
+                     sorted(rep["ext_counts"].items(), key=lambda x: -x[1])[:8])
+    return imgs, (f"<span style='color:#a06f00'>No supported images among "
+                  f"{total} file(s). Found: {seen}</span>")
 
 
 def _metric_row(pairs):
@@ -128,8 +153,13 @@ class ImageCheckerTab(BaseTab):
         if not d:
             return
         self._folder = d
-        self._files = checks.collect_images(d, self.chk_recursive.isChecked())
-        self.lbl_folder.setText(f"<b>{d}</b> — {len(self._files)} image(s)")
+        self._files, msg = _scan_and_describe(d, self.chk_recursive.isChecked())
+        self.lbl_folder.setText(f"<b>{d}</b><br>{msg}")
+        if not self._files:
+            QMessageBox.warning(self, "No images found",
+                                f"{d}\n\n{_plain(msg)}\n\n"
+                                "If the images are in subfolders, tick "
+                                "'include subfolders'.")
 
     def _image_names(self):
         names = list(self._files)
@@ -287,8 +317,10 @@ class ImageRenamerTab(BaseTab):
         d = QFileDialog.getExistingDirectory(self, "Folder with the images to rename")
         if d:
             self._src = d
-            n = len(checks.collect_images(d, False))
-            self.lbl_src.setText(f"<b>{d}</b> — {n} image(s)")
+            files, msg = _scan_and_describe(d, False)
+            self.lbl_src.setText(f"<b>{d}</b><br>{msg}")
+            if not files:
+                QMessageBox.warning(self, "No images found", f"{d}\n\n{_plain(msg)}")
 
     def pick_out(self):
         d = QFileDialog.getExistingDirectory(self, "Where to write the renamed images")
