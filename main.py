@@ -14,12 +14,14 @@ from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QCheckBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory,
+    QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory, QDialog,
 )
 
 import remote
 import updater
+import rules
 import validator_core as vc
+from fill_dialog import FillDialog
 from model import ValidationTableModel, IssueFilterProxy, ERROR_BG, WARNING_BG
 from export import export_annotated
 from version import __version__
@@ -108,6 +110,7 @@ class MainWindow(QMainWindow):
         act_open = QAction("📂 Open file", self); act_open.triggered.connect(self.open_file); tb.addAction(act_open)
         act_reval = QAction("🔁 Re-validate", self); act_reval.triggered.connect(self.run_validation); tb.addAction(act_reval)
         act_fix = QAction("🧹 Fix all spacing", self); act_fix.triggered.connect(self.fix_spacing); tb.addAction(act_fix)
+        act_fill = QAction("🪄 Fill columns", self); act_fill.triggered.connect(self.fill_columns); tb.addAction(act_fill)
         act_save = QAction("💾 Save changes", self); act_save.triggered.connect(self.save_file); tb.addAction(act_save)
         tb.addSeparator()
         act_refresh = QAction("☁️ Refresh data", self); act_refresh.triggered.connect(self.refresh_data); tb.addAction(act_refresh)
@@ -162,11 +165,13 @@ class MainWindow(QMainWindow):
         self.lbl_empty = QLabel("—"); self.lbl_invalid = QLabel("—")
         self.lbl_case = QLabel("—"); self.lbl_ws = QLabel("—"); self.lbl_meta = QLabel("—")
         self.lbl_dup = QLabel("—")
+        self.lbl_rfill = QLabel("—"); self.lbl_rdiff = QLabel("—")
         rows = [("Rows", self.lbl_rows), ("Total issues", self.lbl_total),
                 ("Empty required", self.lbl_empty), ("Invalid values", self.lbl_invalid),
                 ("Duplicates", self.lbl_dup),
                 ("Case mismatch", self.lbl_case), ("Whitespace", self.lbl_ws),
-                ("Meta format", self.lbl_meta)]
+                ("Meta format", self.lbl_meta),
+                ("Rule can fill", self.lbl_rfill), ("Rule differs", self.lbl_rdiff)]
         for i, (name, lbl) in enumerate(rows):
             g.addWidget(QLabel(name + ":"), i, 0); g.addWidget(lbl, i, 1)
         lay.addWidget(self.grp_summary)
@@ -177,6 +182,13 @@ class MainWindow(QMainWindow):
         self.chk_only = QCheckBox("Show only rows with issues")
         self.chk_only.toggled.connect(self.proxy.set_only_issues)
         fl.addWidget(self.chk_only)
+        self.chk_rules = QCheckBox("Check fill rules (macros)")
+        self.chk_rules.setChecked(True)
+        self.chk_rules.toggled.connect(lambda: self.run_validation() if self.user_df is not None else None)
+        fl.addWidget(self.chk_rules)
+        self.chk_undecided = QCheckBox("Flag cells a rule can't determine")
+        self.chk_undecided.toggled.connect(lambda: self.run_validation() if self.user_df is not None else None)
+        fl.addWidget(self.chk_undecided)
         btn_next = QPushButton("⏭ Jump to next issue"); btn_next.clicked.connect(self.jump_next_issue)
         fl.addWidget(btn_next)
         lay.addWidget(grp_f)
@@ -277,7 +289,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Please wait", "Reference data is still loading."); return
         self._set_busy(True, "Validating…")
         udf, mdf = self.user_df, self.master_df
-        self._worker = Worker(lambda: vc.validate(udf, mdf))
+        use_rules = self.chk_rules.isChecked()
+        flag_und = self.chk_undecided.isChecked()
+        self._worker = Worker(lambda: vc.validate(udf, mdf, check_rules=use_rules,
+                                                  flag_undecided=flag_und))
         self._worker.done.connect(self._on_validated)
         self._worker.failed.connect(lambda e: (self._set_busy(False), self._error("Validation failed", e)))
         self._worker.start()
@@ -306,6 +321,8 @@ class MainWindow(QMainWindow):
         self.lbl_empty.setText(str(c["empty"]))
         self.lbl_invalid.setText(str(c["invalid"]))
         self.lbl_dup.setText(str(c.get("duplicate", 0)))
+        self.lbl_rfill.setText(str(c.get("rule_fill", 0)))
+        self.lbl_rdiff.setText(str(c.get("rule_differs", 0)))
         self.lbl_case.setText(str(c["case_mismatch"]))
         self.lbl_ws.setText(str(c["whitespace"]))
         self.lbl_meta.setText(str(c["meta_format"]))
@@ -376,6 +393,33 @@ class MainWindow(QMainWindow):
         self._dirty = True
         self.statusBar().showMessage(f"Fixed spacing in {len(changes)} cell(s) — re-validating…", 5000)
         self.run_validation()
+
+    def fill_columns(self):
+        """Apply the ported Excel fill macros via a dialog."""
+        if self.user_df is None:
+            QMessageBox.information(self, "No file", "Open an Excel file first."); return
+        dlg = FillDialog(self.user_df, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new_df, changes = rules.apply_rules(
+            self.user_df,
+            rule_ids=dlg.selected_rule_ids(),
+            private_params=dlg.private_params(),
+            overwrite=dlg.overwrite(),
+        )
+        if not changes:
+            QMessageBox.information(self, "Nothing to fill", "No cells needed changing.")
+            return
+        self.user_df = new_df
+        self._dirty = True
+        by_rule = {}
+        for c in changes:
+            by_rule[c["label"]] = by_rule.get(c["label"], 0) + 1
+        detail = "\n".join(f"  {k}: {v}" for k, v in sorted(by_rule.items()))
+        self.statusBar().showMessage(f"Filled {len(changes)} cell(s) — re-validating…", 6000)
+        self.run_validation()
+        QMessageBox.information(self, "Filled",
+                                f"Filled {len(changes)} cell(s):\n\n{detail}")
 
     def _on_model_edited(self):
         self._dirty = True

@@ -129,7 +129,9 @@ def fix_spacing(user_df: pd.DataFrame):
     return df, changes
 
 
-def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
+def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
+             check_rules: bool = True, flag_undecided: bool = False,
+             private_params: dict | None = None) -> dict:
     """Run the full Tab-1 validation.
 
     Returns a dict with:
@@ -289,8 +291,31 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
                         f"Case mismatch: '{p}' should be '{ci_map[p.lower()]}'",
                         Value=p, Content=raw_val, Expected=ci_map[p.lower()])
 
+    # ---- Fill-rule checks (ported Excel macros) ----
+    if check_rules:
+        try:
+            import rules as _rules
+            for r in _rules.evaluate(user_df, private_params=private_params):
+                if r["status"] == "fill":
+                    add(r["row"], r["column"], "rule_fill", "warning",
+                        f"Empty — {r['label']} rule can fill this",
+                        Value="", Expected=r["derived"])
+                elif r["status"] == "differs":
+                    add(r["row"], r["column"], "rule_differs", "warning",
+                        f"Differs from {r['label']} rule",
+                        Value=r["current"], Expected=r["derived"])
+                elif r["status"] == "undecided" and flag_undecided:
+                    add(r["row"], r["column"], "rule_undecided", "warning",
+                        f"Empty — {r['label']} rule cannot determine a value",
+                        Value="", Expected="(needs manual entry)")
+        except Exception:
+            pass  # rules are optional; never break validation
+
     counts = {
         "empty": sum(1 for i in issues if i["type"].startswith("empty")),
+        "rule_fill": sum(1 for i in issues if i["type"] == "rule_fill"),
+        "rule_differs": sum(1 for i in issues if i["type"] == "rule_differs"),
+        "rule_undecided": sum(1 for i in issues if i["type"] == "rule_undecided"),
         "meta_format": sum(1 for i in issues if i["type"] == "meta_format"),
         "duplicate": sum(1 for i in issues if i["type"] == "duplicate"),
         "whitespace": sum(1 for i in issues if i["type"] == "whitespace"),
