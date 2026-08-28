@@ -12,10 +12,20 @@ the master and name-master files are fetched live from the
 repo, so any update you push there reaches this app automatically.
 
 ## Run from source
+
+> **Windows long-path note:** the Microsoft Store build of Python uses a very
+> long per-user package path, and PySide6's deeply nested files overflow the
+> 260-char limit (`OSError [Errno 2] … enable-long-paths`). Install into a
+> virtual environment at a **short path** to avoid it:
+
 ```bash
-pip install -r requirements.txt
-python main.py
+python -m venv C:\gv
+C:\gv\Scripts\python.exe -m pip install -r requirements.txt
+C:\gv\Scripts\python.exe main.py
 ```
+
+(Or enable Windows Long Paths via registry `LongPathsEnabled=1` and use a normal
+`pip install`.)
 
 ## Build the .exe
 ```bash
