@@ -44,7 +44,12 @@ class ValidationTableModel(QAbstractTableModel):
             # Force dark text so highlighted cells stay readable in dark mode
             return QColor("#111111")
         if role == Qt.ToolTipRole:
-            return "\n".join(f"• {i['message']}" for i in issues)
+            lines = []
+            for i in issues:
+                lines.append(f"• {i['message']}")
+                if i.get("expected"):
+                    lines.append(f"    Expected: {i['expected']}")
+            return "\n".join(lines)
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -55,6 +60,9 @@ class ValidationTableModel(QAbstractTableModel):
         return str(section + 2)  # Excel row number (header row is 1)
 
     # ---- helpers used by the UI ----
+    def issues_at(self, row, col_name):
+        return self._issues_at(row, col_name)
+
     def row_has_issue(self, row):
         return row in self._rows_with_issues
 

@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_side_panel()
         self._build_statusbar()
+        self.table.selectionModel().currentChanged.connect(self._on_cell_selected)
 
         # Apply saved theme
         dark = self.settings.value("dark_mode", False, type=bool)
@@ -141,6 +142,15 @@ class MainWindow(QMainWindow):
             "padding:8px; border-radius:6px; background:#8a6d000f; "
             "color:#a06f00; font-weight:bold;")
         lay.addWidget(self.lbl_data_status)
+
+        # Selected-cell details
+        self.grp_cell = QGroupBox("Selected cell")
+        cl = QVBoxLayout(self.grp_cell)
+        self.lbl_cell = QLabel("Click a highlighted cell to see its issue.")
+        self.lbl_cell.setWordWrap(True)
+        self.lbl_cell.setTextFormat(Qt.RichText)
+        cl.addWidget(self.lbl_cell)
+        lay.addWidget(self.grp_cell)
 
         # Summary
         self.grp_summary = QGroupBox("Summary")
@@ -283,6 +293,31 @@ class MainWindow(QMainWindow):
             f"sunglasses {len(m['sunglasses_found'])}/{len(vc.SUNGLASSES_REQUIRED_KEYWORDS)}"
             + (f"\n⚠️ {len(m['unmapped'])} unmapped pair(s)." if m["unmapped"] else "")
         )
+
+    def _on_cell_selected(self, current, previous):
+        if self.model is None or not current.isValid():
+            self.lbl_cell.setText("Click a highlighted cell to see its issue.")
+            return
+        src = self.proxy.mapToSource(current)
+        cols = list(self.model.dataframe().columns)
+        col_name = cols[src.column()]
+        value = self.model.dataframe().iat[src.row(), src.column()]
+        value = "" if value is None or str(value) == "nan" else str(value)
+        issues = self.model.issues_at(src.row(), col_name)
+
+        html = [f"<b>Row {src.row() + 2}</b> · <b>{col_name}</b>",
+                f"Value: <code>{(value or '(empty)')}</code>"]
+        if not issues:
+            html.append("<span style='color:#1a7f37'>✓ No issues on this cell.</span>")
+        else:
+            for i in issues:
+                sev = "#b30000" if i["severity"] == "error" else "#a06f00"
+                html.append(f"<div style='margin-top:6px'>"
+                            f"<span style='color:{sev}'><b>Issue:</b> {i['message']}</span>")
+                if i.get("expected"):
+                    html.append(f"<b>Expected:</b> {i['expected']}")
+                html.append("</div>")
+        self.lbl_cell.setText("<br>".join(html))
 
     def jump_next_issue(self):
         if not self._issue_cells or self.model is None:

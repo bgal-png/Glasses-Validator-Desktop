@@ -149,9 +149,16 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame) -> dict:
     issues: list = []
 
     def add(row_idx, col, itype, severity, message, **extra):
-        cell_issues.setdefault((row_idx, col), []).append(
-            {"type": itype, "severity": severity, "message": message}
-        )
+        expected = extra.get("Expected")
+        if expected is None and extra.get("Allowed"):
+            expected = "e.g. " + ", ".join(extra["Allowed"])
+        cell_issues.setdefault((row_idx, col), []).append({
+            "type": itype,
+            "severity": severity,
+            "message": message,
+            "value": extra.get("Value"),
+            "expected": expected,
+        })
         rec = {"Row": row_idx + 2, "Column": col, "Error": message, "type": itype}
         rec.update(extra)
         issues.append(rec)
