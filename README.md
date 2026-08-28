@@ -6,6 +6,16 @@ error, amber = warning). Hover a cell to see why. A side control panel gives you
 summary counts, an "only rows with issues" filter, jump-to-next-issue, a reference
 data refresh, and an annotated-Excel export.
 
+## Tabs
+
+| Tab | What it does |
+|---|---|
+| 📊 Data validation | The marked-up grid: edit cells, fix spacing, fill columns from the ported Excel macros, delete rows, save with the template header |
+| 🖼️ Image checker | Point at an image folder (or paste paths) and see which names have no image, which images match nothing, and any duplicates |
+| 🚫 Banned brands | Matrix of the brands in your file against the per-site banned / allow lists |
+| 🏷️ Image renamer | Renames images to the canonical product names (barcode-named files matched via the Barcode column), optionally resizing to a centred PNG, written straight into an output folder |
+| 🧬 Syntax & duplicates | Names already in the name master, repeated inside the file, or with an unseen naming pattern |
+
 It shares its validation logic and reference data with the web validator:
 the master and name-master files are fetched live from the
 [`Glasses-Import-Validator`](https://github.com/bgal-png/Glasses-Import-Validator)

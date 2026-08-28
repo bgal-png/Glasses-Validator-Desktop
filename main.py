@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QCheckBox, QFileDialog, QMessageBox,
     QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory, QDialog, QMenu,
+    QTabWidget,
 )
 
 import remote
@@ -23,6 +24,8 @@ import rules
 import template
 import validator_core as vc
 from fill_dialog import FillDialog
+from tabs import (ImageCheckerTab, BannedBrandsTab, ImageRenamerTab,
+                  SyntaxDuplicatesTab)
 from model import ValidationTableModel, IssueFilterProxy, ERROR_BG, WARNING_BG
 from export import export_annotated
 from version import __version__
@@ -83,16 +86,32 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._dirty = False
         self._current_name = None
+        self.name_master = None
         self.settings = QSettings("Alensa", "GlassesValidator")
 
-        # ---- central table ----
+        # ---- central tabs; tab 1 is the validation grid ----
         self.table = QTableView()
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_context_menu)
-        self.setCentralWidget(self.table)
+
+        self.tab_images = ImageCheckerTab()
+        self.tab_banned = BannedBrandsTab()
+        self.tab_renamer = ImageRenamerTab()
+        self.tab_syntax = SyntaxDuplicatesTab(lambda: self.name_master)
+        self.extra_tabs = [self.tab_images, self.tab_banned,
+                           self.tab_renamer, self.tab_syntax]
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.table, "📊 Data validation")
+        self.tabs.addTab(self.tab_images, "🖼️ Image checker")
+        self.tabs.addTab(self.tab_banned, "🚫 Banned brands")
+        self.tabs.addTab(self.tab_renamer, "🏷️ Image renamer")
+        self.tabs.addTab(self.tab_syntax, "🧬 Syntax & duplicates")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.setCentralWidget(self.tabs)
 
         self._build_toolbar()
         self._build_side_panel()
@@ -124,6 +143,14 @@ class MainWindow(QMainWindow):
         self.act_dark = QAction("🌙 Dark mode", self); self.act_dark.setCheckable(True)
         self.act_dark.toggled.connect(self._toggle_dark); tb.addAction(self.act_dark)
 
+    def _on_tab_changed(self, index):
+        """The control panel only applies to the validation grid."""
+        self.dock.setVisible(index == 0)
+
+    def _push_dataframe_to_tabs(self):
+        for t in self.extra_tabs:
+            t.set_dataframe(self.user_df)
+
     def _build_statusbar(self):
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(180)
@@ -141,7 +168,7 @@ class MainWindow(QMainWindow):
         self.settings.setValue("dark_mode", on)
 
     def _build_side_panel(self):
-        dock = QDockWidget("Control panel", self)
+        dock = self.dock = QDockWidget("Control panel", self)
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         panel = QWidget(); lay = QVBoxLayout(panel)
 
@@ -264,6 +291,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Reference data ready — open a file to validate.", 8000)
         if self.user_df is not None:
             self.run_validation()
+        # The name master is only needed by the Syntax & duplicates tab, so it
+        # loads afterwards in the background.
+        self._nm_worker = Worker(remote.load_name_master)
+        self._nm_worker.done.connect(self._on_name_master_loaded)
+        self._nm_worker.start()
+
+    def _on_name_master_loaded(self, names):
+        self.name_master = names
+        if names:
+            self.statusBar().showMessage(
+                f"Name master ready — {len(names):,} names.", 5000)
 
     def _on_data_error(self, e):
         self._set_busy(False)
@@ -291,6 +329,7 @@ class MainWindow(QMainWindow):
         self._current_name = path.replace("\\", "/").split("/")[-1]
         self._dirty = False
         self.setWindowTitle(self._base_title())
+        self._push_dataframe_to_tabs()
         self.run_validation()
 
     def run_validation(self):
@@ -322,6 +361,7 @@ class MainWindow(QMainWindow):
         self._issue_cells = sorted(result["cell_issues"].keys())
         self._issue_pos = -1
         self._update_summary(result)
+        self._push_dataframe_to_tabs()
         c = result["counts"]
         self.statusBar().showMessage(f"Done — {c['total']} issue(s) found.", 8000)
 
