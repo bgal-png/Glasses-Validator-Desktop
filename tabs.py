@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QCheckBox, QFileDialog, QMessageBox, QGroupBox, QTableWidget,
     QTableWidgetItem, QPlainTextEdit, QTabWidget, QSpinBox, QComboBox, QSlider,
-    QProgressBar, QHeaderView, QAbstractItemView,
+    QProgressBar, QHeaderView, QAbstractItemView, QMenu, QApplication,
 )
 
 import checks
@@ -237,12 +237,69 @@ class BannedBrandsTab(BaseTab):
         ])
         lay.addWidget(mrow)
         self.lbl_status = QLabel("—"); self.lbl_status.setWordWrap(True)
+        self.lbl_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         lay.addWidget(self.lbl_status)
+        lay.addWidget(QLabel(
+            "<i>Click a brand header to copy it · right-click a header for more "
+            "options · Ctrl+C copies the selection</i>"))
         self.table = QTableWidget(0, 0)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        # Brand names live in the headers, which aren't selectable — so make
+        # them copyable by click and via a context menu.
+        hh = self.table.horizontalHeader()
+        hh.setSectionsClickable(True)
+        hh.sectionClicked.connect(self._copy_brand)
+        hh.setContextMenuPolicy(Qt.CustomContextMenu)
+        hh.customContextMenuRequested.connect(self._header_menu)
+        vh = self.table.verticalHeader()
+        vh.setSectionsClickable(True)
+        vh.sectionClicked.connect(self._copy_site)
         lay.addWidget(self.table, 1)
+        self._brands = []
+        self._sites = []
+        self._flagged = {}
         self.lbl_clean = QLabel(""); self.lbl_clean.setWordWrap(True)
         lay.addWidget(self.lbl_clean)
+
+    def _to_clipboard(self, text, what):
+        QApplication.clipboard().setText(text)
+        self.lbl_status.setText(f"📋 Copied {what}: <b>{text if len(text) < 80 else text[:80] + '…'}</b>")
+
+    def _copy_brand(self, index):
+        if 0 <= index < len(self._brands):
+            self._to_clipboard(self._brands[index], "brand")
+
+    def _copy_site(self, index):
+        if 0 <= index < len(self._sites):
+            self._to_clipboard(self._sites[index], "site")
+
+    def _header_menu(self, pos):
+        hh = self.table.horizontalHeader()
+        index = hh.logicalIndexAt(pos)
+        menu = QMenu(self)
+        if 0 <= index < len(self._brands):
+            brand = self._brands[index]
+            a1 = menu.addAction(f'Copy "{brand}"')
+            a1.triggered.connect(lambda: self._to_clipboard(brand, "brand"))
+            sites = [s for s in self._sites if brand in self._flagged.get(s, ())]
+            a2 = menu.addAction(f'Copy "{brand}" + its {len(sites)} site(s)')
+            a2.triggered.connect(lambda: self._to_clipboard(
+                brand + "\t" + ", ".join(sites), "brand + sites"))
+            menu.addSeparator()
+        a3 = menu.addAction(f"Copy all {len(self._brands)} flagged brands")
+        a3.triggered.connect(lambda: self._to_clipboard(
+            "\n".join(self._brands), "all flagged brands"))
+        a4 = menu.addAction("Copy whole matrix (TSV)")
+        a4.triggered.connect(self._copy_matrix)
+        menu.exec(hh.mapToGlobal(pos))
+
+    def _copy_matrix(self):
+        lines = ["Site\t" + "\t".join(self._brands)]
+        for s in self._sites:
+            flagged = self._flagged.get(s, set())
+            lines.append(s + "\t" + "\t".join("X" if b in flagged else ""
+                                              for b in self._brands))
+        self._to_clipboard("\n".join(lines), "matrix")
 
     def on_dataframe(self, df):
         if df is None:
@@ -261,6 +318,8 @@ class BannedBrandsTab(BaseTab):
             + ", ".join(r["brands"][:20]) + (" …" if len(r["brands"]) > 20 else ""))
 
         brands, sites = r["flagged_brands"], r["sites_with_flags"]
+        self._brands, self._sites = brands, sites
+        self._flagged = r["flagged_by_site"]
         self.table.clear()
         self.table.setRowCount(len(sites)); self.table.setColumnCount(len(brands))
         self.table.setHorizontalHeaderLabels(brands)
