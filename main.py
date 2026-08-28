@@ -9,12 +9,12 @@ from __future__ import annotations
 import sys
 import pandas as pd
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QModelIndex
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtCore import Qt, QThread, Signal, QObject, QModelIndex, QSettings
+from PySide6.QtGui import QAction, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QLabel, QPushButton, QCheckBox, QFileDialog, QMessageBox,
-    QGroupBox, QGridLayout, QFrame, QProgressDialog,
+    QGroupBox, QGridLayout, QFrame, QProgressBar, QStyleFactory,
 )
 
 import remote
@@ -23,6 +23,29 @@ import validator_core as vc
 from model import ValidationTableModel, IssueFilterProxy, ERROR_BG, WARNING_BG
 from export import export_annotated
 from version import __version__
+
+
+def apply_theme(app, dark: bool):
+    """Apply a light or dark Fusion palette to the whole app."""
+    app.setStyle(QStyleFactory.create("Fusion"))
+    pal = QPalette()
+    if dark:
+        c = QColor
+        pal.setColor(QPalette.Window, c(45, 45, 48))
+        pal.setColor(QPalette.WindowText, c(230, 230, 230))
+        pal.setColor(QPalette.Base, c(30, 30, 32))
+        pal.setColor(QPalette.AlternateBase, c(40, 40, 44))
+        pal.setColor(QPalette.Text, c(230, 230, 230))
+        pal.setColor(QPalette.Button, c(55, 55, 60))
+        pal.setColor(QPalette.ButtonText, c(230, 230, 230))
+        pal.setColor(QPalette.ToolTipBase, c(45, 45, 48))
+        pal.setColor(QPalette.ToolTipText, c(230, 230, 230))
+        pal.setColor(QPalette.Highlight, c(38, 110, 190))
+        pal.setColor(QPalette.HighlightedText, c(255, 255, 255))
+        pal.setColor(QPalette.Disabled, QPalette.Text, c(130, 130, 130))
+    else:
+        pal = app.style().standardPalette()
+    app.setPalette(pal)
 
 
 # ---------- generic background worker ----------
@@ -55,6 +78,7 @@ class MainWindow(QMainWindow):
         self._issue_cells = []
         self._issue_pos = -1
         self._worker = None
+        self.settings = QSettings("Alensa", "GlassesValidator")
 
         # ---- central table ----
         self.table = QTableView()
@@ -65,7 +89,12 @@ class MainWindow(QMainWindow):
 
         self._build_toolbar()
         self._build_side_panel()
-        self.statusBar().showMessage("Loading reference data…")
+        self._build_statusbar()
+
+        # Apply saved theme
+        dark = self.settings.value("dark_mode", False, type=bool)
+        self.act_dark.setChecked(dark)
+        apply_theme(QApplication.instance(), dark)
 
         self._load_reference_data()
         self._check_updates_async()
@@ -81,11 +110,37 @@ class MainWindow(QMainWindow):
         act_export = QAction("💾 Export annotated", self); act_export.triggered.connect(self.export_file); tb.addAction(act_export)
         tb.addSeparator()
         act_upd = QAction("⬆️ Check updates", self); act_upd.triggered.connect(lambda: self._check_updates_async(manual=True)); tb.addAction(act_upd)
+        self.act_dark = QAction("🌙 Dark mode", self); self.act_dark.setCheckable(True)
+        self.act_dark.toggled.connect(self._toggle_dark); tb.addAction(self.act_dark)
+
+    def _build_statusbar(self):
+        self.progress = QProgressBar()
+        self.progress.setMaximumWidth(180)
+        self.progress.setRange(0, 0)   # busy/indeterminate
+        self.progress.setVisible(False)
+        self.statusBar().addPermanentWidget(self.progress)
+
+    def _set_busy(self, on: bool, message: str = ""):
+        self.progress.setVisible(on)
+        if message:
+            self.statusBar().showMessage(message, 0 if on else 8000)
+
+    def _toggle_dark(self, on: bool):
+        apply_theme(QApplication.instance(), on)
+        self.settings.setValue("dark_mode", on)
 
     def _build_side_panel(self):
         dock = QDockWidget("Control panel", self)
         dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         panel = QWidget(); lay = QVBoxLayout(panel)
+
+        # Reference-data status (prominent)
+        self.lbl_data_status = QLabel("⏳ Loading reference data…")
+        self.lbl_data_status.setWordWrap(True)
+        self.lbl_data_status.setStyleSheet(
+            "padding:8px; border-radius:6px; background:#8a6d000f; "
+            "color:#a06f00; font-weight:bold;")
+        lay.addWidget(self.lbl_data_status)
 
         # Summary
         self.grp_summary = QGroupBox("Summary")
@@ -138,23 +193,41 @@ class MainWindow(QMainWindow):
         return w
 
     # ---------- reference data ----------
+    def _set_data_status(self, text, state):
+        colors = {
+            "loading": ("#a06f00", "#8a6d000f"),
+            "ready": ("#1a7f37", "#1a7f370f"),
+            "error": ("#b30000", "#b300000f"),
+        }
+        fg, bg = colors.get(state, colors["loading"])
+        self.lbl_data_status.setText(text)
+        self.lbl_data_status.setStyleSheet(
+            f"padding:8px; border-radius:6px; background:{bg}; color:{fg}; font-weight:bold;")
+
     def _load_reference_data(self, force=False):
-        self.statusBar().showMessage("Loading reference data from GitHub…")
+        self._set_busy(True, "Loading reference data from GitHub…")
+        self._set_data_status("⏳ Loading reference data…", "loading")
         self._worker = Worker(lambda: remote.load_master(force=force))
         self._worker.done.connect(self._on_master_loaded)
-        self._worker.failed.connect(lambda e: self._error("Could not load master data", e))
+        self._worker.failed.connect(self._on_data_error)
         self._worker.start()
 
     def _on_master_loaded(self, df):
         self.master_df = df
-        self.statusBar().showMessage(
-            f"Reference data ready — {len(df)} master rows. Open a file to validate.", 8000)
+        self._set_busy(False)
+        self._set_data_status(f"✅ Reference data ready\n{len(df):,} master rows loaded", "ready")
+        self.statusBar().showMessage("Reference data ready — open a file to validate.", 8000)
+        if self.user_df is not None:
+            self.run_validation()
+
+    def _on_data_error(self, e):
+        self._set_busy(False)
+        self._set_data_status("❌ Could not load reference data\n(check your connection)", "error")
+        self._error("Could not load master data", e)
 
     def refresh_data(self):
         remote.force_refresh()
         self._load_reference_data(force=True)
-        if self.user_df is not None:
-            self.statusBar().showMessage("Reference data refreshed — re-validating…", 4000)
 
     # ---------- file open + validation ----------
     def open_file(self):
@@ -174,14 +247,15 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No file", "Open an Excel file first."); return
         if self.master_df is None:
             QMessageBox.information(self, "Please wait", "Reference data is still loading."); return
-        self.statusBar().showMessage("Validating…")
+        self._set_busy(True, "Validating…")
         udf, mdf = self.user_df, self.master_df
         self._worker = Worker(lambda: vc.validate(udf, mdf))
         self._worker.done.connect(self._on_validated)
-        self._worker.failed.connect(lambda e: self._error("Validation failed", e))
+        self._worker.failed.connect(lambda e: (self._set_busy(False), self._error("Validation failed", e)))
         self._worker.start()
 
     def _on_validated(self, result):
+        self._set_busy(False)
         self.result = result
         self.model = ValidationTableModel(self.user_df, result["cell_issues"])
         self.proxy.setSourceModel(self.model)
@@ -270,6 +344,7 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyle(QStyleFactory.create("Fusion"))
     w = MainWindow()
     w.show()
     sys.exit(app.exec())

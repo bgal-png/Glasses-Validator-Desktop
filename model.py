@@ -40,6 +40,9 @@ class ValidationTableModel(QAbstractTableModel):
         if role == Qt.BackgroundRole:
             has_error = any(i["type"] in ERROR_TYPES for i in issues)
             return ERROR_BG if has_error else WARNING_BG
+        if role == Qt.ForegroundRole:
+            # Force dark text so highlighted cells stay readable in dark mode
+            return QColor("#111111")
         if role == Qt.ToolTipRole:
             return "\n".join(f"• {i['message']}" for i in issues)
         return None
