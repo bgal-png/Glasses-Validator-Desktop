@@ -57,9 +57,28 @@ def check_latest(timeout: int = 15) -> dict | None:
         return None
 
 
-def download_and_apply(exe_url: str, timeout: int = 120) -> bool:
-    """Download the new exe and schedule a swap+relaunch on process exit.
-    Returns True if the swap was scheduled (caller should then quit the app)."""
+def _looks_like_exe(path: str, min_bytes: int = 5_000_000) -> bool:
+    """Guard against replacing a working app with an error page or a truncated
+    download: must be a real PE binary of a plausible size."""
+    try:
+        if os.path.getsize(path) < min_bytes:
+            return False
+        with open(path, "rb") as f:
+            return f.read(2) == b"MZ"
+    except OSError:
+        return False
+
+
+def download_and_apply(exe_url: str, timeout: int = 600) -> bool:
+    """Download the new exe and schedule a swap+relaunch once this process exits.
+    Returns True if the swap was scheduled (caller should then quit the app).
+
+    Uses PowerShell rather than a .bat: the previous batch script called
+    `timeout`, which fails instantly with "Input redirection is not supported"
+    when there is no console (CREATE_NO_WINDOW). The batch file then carried on
+    and tried to move the exe while it was still locked, so the move failed and
+    the update silently did nothing.
+    """
     if not is_frozen():
         # In dev there is no exe to replace.
         return False
@@ -70,19 +89,55 @@ def download_and_apply(exe_url: str, timeout: int = 120) -> bool:
         r.raise_for_status()
         with open(new_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=1 << 16):
-                f.write(chunk)
+                if chunk:
+                    f.write(chunk)
     except Exception:
         return False
 
-    # A batch script waits for this process to exit, replaces the exe, relaunches.
-    bat = os.path.join(tempfile.gettempdir(), "GlassesValidator_update.bat")
-    with open(bat, "w", encoding="utf-8") as f:
-        f.write(
-            "@echo off\r\n"
-            "timeout /t 2 /nobreak >nul\r\n"
-            f'move /y "{new_path}" "{current}" >nul\r\n'
-            f'start "" "{current}"\r\n'
-            'del "%~f0"\r\n'
-        )
-    subprocess.Popen(["cmd", "/c", bat], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if not _looks_like_exe(new_path):
+        try:
+            os.remove(new_path)
+        except OSError:
+            pass
+        return False
+
+    def q(p):  # PowerShell single-quoted literal
+        return p.replace("'", "''")
+
+    backup = current + ".old"
+    script = f"""$ErrorActionPreference = 'SilentlyContinue'
+# Wait for the app to actually exit rather than guessing with a sleep.
+try {{ Wait-Process -Id {os.getpid()} -Timeout 180 }} catch {{ }}
+$new = '{q(new_path)}'
+$cur = '{q(current)}'
+$bak = '{q(backup)}'
+Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+$ok = $false
+for ($i = 0; $i -lt 60; $i++) {{
+    try {{
+        # Keep the old exe aside so a failed swap can be rolled back.
+        Move-Item -LiteralPath $cur -Destination $bak -Force -ErrorAction Stop
+        Move-Item -LiteralPath $new -Destination $cur -Force -ErrorAction Stop
+        $ok = $true
+        break
+    }} catch {{
+        if ((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $cur)) {{
+            Move-Item -LiteralPath $bak -Destination $cur -Force -ErrorAction SilentlyContinue
+        }}
+        Start-Sleep -Milliseconds 500
+    }}
+}}
+if ($ok) {{ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }}
+Start-Process -FilePath $cur
+Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+"""
+    ps1 = os.path.join(tempfile.gettempdir(), "GlassesValidator_update.ps1")
+    with open(ps1, "w", encoding="utf-8") as f:
+        f.write(script)
+
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-WindowStyle", "Hidden", "-File", ps1],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
     return True
