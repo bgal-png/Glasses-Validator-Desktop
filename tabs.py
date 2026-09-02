@@ -384,6 +384,10 @@ class ImageRenamerTab(BaseTab):
         self.btn_apply.setEnabled(False)
         b.addWidget(self.btn_preview); b.addWidget(self.btn_apply); b.addStretch(1)
         lay.addLayout(b)
+        self.lbl_apply_hint = QLabel("")
+        self.lbl_apply_hint.setWordWrap(True)
+        self.lbl_apply_hint.setStyleSheet("color:#a06f00;")
+        lay.addWidget(self.lbl_apply_hint)
 
         mr, self.metrics = _metric_row([
             ("total", "Images"), ("matched", "Matched"),
@@ -396,21 +400,55 @@ class ImageRenamerTab(BaseTab):
 
         self._src = self._out = None
         self._plan = []
+        self._update_apply_state()
 
     def pick_src(self):
         d = pick_directory(self, "Folder with the images to rename")
         if d:
             self._src = d
+            # A plan from the previous folder must not survive, or Apply
+            # would copy files from the old source.
+            self._plan = []
+            self.results.clear()
+            for _k in self.metrics:
+                self.metrics[_k].setText("—")
             files, msg = _scan_and_describe(d, False)
             self.lbl_src.setText(f"<b>{d}</b><br>{msg}")
             if not files:
                 QMessageBox.warning(self, "No images found", f"{d}\n\n{_plain(msg)}")
+            self._update_apply_state()
 
     def pick_out(self):
         d = pick_directory(self, "Where to write the renamed images")
         if d:
             self._out = d
             self.lbl_out.setText(f"<b>{d}</b>")
+            self._update_apply_state()
+
+    def _update_apply_state(self):
+        """Enable Apply only when there is a usable plan and somewhere to
+        write to, and always say out loud what is still missing."""
+        matched = [r for r in self._plan if r["status"] == "matched"]
+        todo = []
+        if not self._src:
+            todo.append("pick a source folder")
+        if not self._plan:
+            todo.append('click "Preview matches"')
+        elif not matched:
+            todo.append("no images matched the product list — check the names")
+        if not self._out:
+            todo.append("pick an output folder")
+
+        ready = bool(matched) and bool(self._out)
+        self.btn_apply.setEnabled(ready)
+        if ready:
+            self.btn_apply.setToolTip(
+                f"Write {len(matched)} renamed image(s) into {self._out}")
+            self.lbl_apply_hint.setText("")
+        else:
+            msg = "Still needed: " + "; ".join(todo)
+            self.btn_apply.setToolTip(msg)
+            self.lbl_apply_hint.setText(msg)
 
     def _entries_and_barcodes(self):
         name_col = next((c for c in self.df.columns if "glasses name" in c.lower()),
@@ -475,7 +513,7 @@ class ImageRenamerTab(BaseTab):
                                    [(r["source"], r.get("reason", {}).get("status", "?"))
                                     for r in unmatched]),
                             f"⚠️ Unmatched ({len(unmatched)})")
-        self.btn_apply.setEnabled(bool(matched))
+        self._update_apply_state()
 
     def apply(self):
         matched = [r for r in self._plan if r["status"] == "matched"]
