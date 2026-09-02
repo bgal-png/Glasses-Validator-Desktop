@@ -105,9 +105,19 @@ def download_and_apply(exe_url: str, timeout: int = 600) -> bool:
         return p.replace("'", "''")
 
     backup = current + ".old"
+    proc_name = os.path.splitext(os.path.basename(current))[0]
     script = f"""$ErrorActionPreference = 'SilentlyContinue'
 # Wait for the app to actually exit rather than guessing with a sleep.
+# os.getpid() is the *Python child*; a onefile build also has a bootloader
+# parent process that outlives it by a few hundred ms and still owns the exe
+# file. Renaming the exe out from under a live bootloader is what triggers
+# PyInstaller's "parent process has different executable" check, so wait for
+# every process of this app to be gone, not just our own PID.
 try {{ Wait-Process -Id {os.getpid()} -Timeout 180 }} catch {{ }}
+for ($i = 0; $i -lt 240; $i++) {{
+    if (-not (Get-Process -Name '{proc_name}' -ErrorAction SilentlyContinue)) {{ break }}
+    Start-Sleep -Milliseconds 250
+}}
 $new = '{q(new_path)}'
 $cur = '{q(current)}'
 $bak = '{q(backup)}'
