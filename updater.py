@@ -118,6 +118,12 @@ for ($i = 0; $i -lt 240; $i++) {{
     if (-not (Get-Process -Name '{proc_name}' -ErrorAction SilentlyContinue)) {{ break }}
     Start-Sleep -Milliseconds 250
 }}
+# PyInstaller marks a onefile child with these; if they survive into the
+# relaunched exe it decides it is a child process and fails its parent-process
+# security validation ("parent process has different executable").
+Remove-Item Env:_PYI_PARENT_PROCESS_LEVEL -ErrorAction SilentlyContinue
+Remove-Item Env:_PYI_ARCHIVE_FILE -ErrorAction SilentlyContinue
+Remove-Item Env:_PYI_APPLICATION_HOME_DIR -ErrorAction SilentlyContinue
 $new = '{q(new_path)}'
 $cur = '{q(current)}'
 $bak = '{q(backup)}'
@@ -145,9 +151,16 @@ Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction Silent
     with open(ps1, "w", encoding="utf-8") as f:
         f.write(script)
 
+    # Hand PowerShell a clean environment: _PYI_APPLICATION_HOME_DIR,
+    # _PYI_ARCHIVE_FILE and _PYI_PARENT_PROCESS_LEVEL are inherited by every
+    # subprocess, and the relaunched exe would then treat itself as a onefile
+    # child and abort with a security-validation error instead of starting.
+    clean_env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI")}
+
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
          "-WindowStyle", "Hidden", "-File", ps1],
+        env=clean_env,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     return True
