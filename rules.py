@@ -257,6 +257,41 @@ def make_private_name_rule(eye="", sun="", comp=""):
     return rule
 
 
+# --------------------------------------------------------------------------
+# Append rules — these ADD a value to a multi-value (pipe-separated) column
+# instead of replacing it, so an existing collection is kept.
+# --------------------------------------------------------------------------
+
+def split_multi(value):
+    """Split a pipe-separated cell into its parts."""
+    return [v.strip() for v in str(value).split("|") if v.strip()]
+
+
+def has_value(cell, value):
+    return value.lower() in {v.lower() for v in split_multi(cell)}
+
+
+def add_value(cell, value):
+    """Append value to a pipe-separated cell, keeping what is already there."""
+    parts = split_multi(cell)
+    if value.lower() in {v.lower() for v in parts}:
+        return "|".join(parts)
+    parts.append(value)
+    return "|".join(parts)
+
+
+LATEST_3_MONTHS = "Latest (3 months)"
+
+# id, label, target logical column, value to add, source description
+APPEND_RULES = [
+    ("latest_3m", "Latest (3 months)", "collection", LATEST_3_MONTHS,
+     "added to every row, keeping any existing collection"),
+]
+
+# Append rules are opt-in: only tick them on an import of genuinely new glasses.
+APPEND_DEFAULT_ON = set()
+
+
 # Rules left unticked in the Fill dialog by default — these derive values from
 # the product name/brand, which is usually already correct in the file, so
 # re-deriving them is opt-in.
@@ -299,6 +334,24 @@ def evaluate(user_df, rule_ids=None, private_params=None):
         active = [r for r in active if r[0] in rule_ids]
 
     out = []
+
+    # Append rules add a value to a multi-value column rather than replacing it.
+    for rid, label, target_key, value, _src in APPEND_RULES:
+        if rule_ids is not None and rid not in rule_ids:
+            continue
+        target = C.get(target_key)
+        if not target:
+            continue
+        for idx, row in user_df.iterrows():
+            current = _s(row, target)
+            if has_value(current, value):
+                status, derived = "ok", current
+            else:
+                status, derived = "append", add_value(current, value)
+            out.append({"rule": rid, "label": label, "row": idx, "column": target,
+                        "current": current, "derived": derived, "status": status,
+                        "append": True})
+
     for rid, label, target_key, fn, _src in active:
         target = C.get(target_key)
         if not target:
@@ -325,7 +378,7 @@ def apply_rules(user_df, rule_ids=None, private_params=None, overwrite=False):
     which clear the column first). Returns (new_df, changes)."""
     df = user_df.copy()
     results = evaluate(df, rule_ids=rule_ids, private_params=private_params)
-    wanted = {"fill"} | ({"differs"} if overwrite else set())
+    wanted = {"fill", "append"} | ({"differs"} if overwrite else set())
     changes = []
     for r in results:
         if r["status"] in wanted:

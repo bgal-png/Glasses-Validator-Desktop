@@ -61,6 +61,24 @@ class FillDialog(QDialog):
         sa = QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(grp)
         root.addWidget(sa, 1)
 
+        # --- Append rules: add a value to a multi-value column ---
+        grp_add = QGroupBox("Add to a column  —  keeps any value already there")
+        ag = QGridLayout(grp_add)
+        ag.addWidget(QLabel("<b>Value</b>"), 0, 0)
+        ag.addWidget(QLabel("<b>To add</b>"), 0, 1)
+        ag.addWidget(QLabel("<b>Where</b>"), 0, 2)
+        self._append_boxes = {}
+        self._append_labels = {}
+        for r, (rid, label, _tk, value, src) in enumerate(rules.APPEND_RULES, start=1):
+            cb = QCheckBox(f'Add "{value}"')
+            cb.setChecked(rid in rules.APPEND_DEFAULT_ON)
+            self._append_boxes[rid] = cb
+            lc = QLabel("—")
+            self._append_labels[rid] = lc
+            ag.addWidget(cb, r, 0); ag.addWidget(lc, r, 1)
+            ag.addWidget(QLabel(f"<i>{label} — {src}</i>"), r, 2)
+        root.addWidget(grp_add)
+
         # --- Options ---
         self.chk_overwrite = QCheckBox(
             "Also overwrite values that differ from the rule "
@@ -85,6 +103,8 @@ class FillDialog(QDialog):
         root.addWidget(bb)
 
         for cb in self._boxes.values():
+            cb.toggled.connect(self._refresh_summary)
+        for cb in self._append_boxes.values():
             cb.toggled.connect(self._refresh_summary)
         self.chk_pn.toggled.connect(self._refresh_summary)
         self._refresh_counts()
@@ -111,6 +131,8 @@ class FillDialog(QDialog):
         for rid, (lf, ld) in self._count_labels.items():
             c = per.get(rid, Counter())
             lf.setText(str(c["fill"])); ld.setText(str(c["differs"]))
+        for rid, lbl in self._append_labels.items():
+            lbl.setText(str(per.get(rid, Counter())["append"]))
         self._pn_counts = per.get("private_name", Counter())
         self._refresh_summary()
 
@@ -122,9 +144,12 @@ class FillDialog(QDialog):
             if rid == "private_name":
                 if not self.chk_pn.isChecked():
                     continue
+            elif rid in self._append_boxes:
+                if not self._append_boxes[rid].isChecked():
+                    continue
             elif rid not in sel:
                 continue
-            if r["status"] == "fill":
+            if r["status"] in ("fill", "append"):
                 n_fill += 1
             elif r["status"] == "differs":
                 n_diff += 1
@@ -134,6 +159,7 @@ class FillDialog(QDialog):
 
     def selected_rule_ids(self):
         sel = {rid for rid, cb in self._boxes.items() if cb.isChecked()}
+        sel |= {rid for rid, cb in self._append_boxes.items() if cb.isChecked()}
         # The Name private rule has its own checkbox, not one of the per-rule
         # boxes — include it so apply_rules()' rule_ids filter keeps it.
         if self.chk_pn.isChecked():

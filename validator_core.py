@@ -67,6 +67,14 @@ IDEAL_PAIRS = {
     "Glasses lenses no-orders": "no-orders ID",
 }
 
+# Values the business uses that the master export does not (yet) contain.
+# The master is a snapshot of what is already live, so a newly introduced
+# collection is missing from it and every freshly filled cell would otherwise
+# be flagged "Invalid value". Keyed by a column-header keyword.
+EXTRA_ALLOWED_VALUES = {
+    "Glasses collection": ["Latest (3 months)"],
+}
+
 META_TYPE_PREFIXES = ["Sunglasses", "Eyeglasses"]
 
 # Any whitespace char incl. NBSP, zero-width space, BOM, tab, etc.
@@ -181,6 +189,11 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
         for v in exploded:
             if v and v.lower() not in mapping:
                 mapping[v.lower()] = v  # first-seen casing wins
+        # Accept values we know are valid but that the master snapshot lacks.
+        for kw, extras in EXTRA_ALLOWED_VALUES.items():
+            if kw.lower() in m_col.lower():
+                for v in extras:
+                    mapping.setdefault(v.lower(), v)
         valid_values_ci[m_col] = mapping
 
     cell_issues: dict = {}
