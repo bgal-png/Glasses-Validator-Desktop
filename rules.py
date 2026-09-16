@@ -280,11 +280,11 @@ def add_value(cell, value):
     return "|".join(parts)
 
 
-LATEST_3_MONTHS = "Latest (3 months)"
+LATEST_6_MONTHS = "Latest (6 months)"
 
 # id, label, target logical column, value to add, source description
 APPEND_RULES = [
-    ("latest_3m", "Latest (3 months)", "collection", LATEST_3_MONTHS,
+    ("latest_6m", "Latest (6 months)", "collection", LATEST_6_MONTHS,
      "added to every row, keeping any existing collection"),
 ]
 

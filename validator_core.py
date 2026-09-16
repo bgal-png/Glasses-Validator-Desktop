@@ -72,7 +72,7 @@ IDEAL_PAIRS = {
 # collection is missing from it and every freshly filled cell would otherwise
 # be flagged "Invalid value". Keyed by a column-header keyword.
 EXTRA_ALLOWED_VALUES = {
-    "Glasses collection": ["Latest (3 months)"],
+    "Glasses collection": ["Latest (6 months)"],
 }
 
 META_TYPE_PREFIXES = ["Sunglasses", "Eyeglasses"]
