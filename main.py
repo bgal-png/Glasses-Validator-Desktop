@@ -98,7 +98,7 @@ class MainWindow(QMainWindow):
         # not once per click, so it is debounced into a single background pass.
         self._revalidate_timer = QTimer(self)
         self._revalidate_timer.setSingleShot(True)
-        self._revalidate_timer.setInterval(900)
+        self._revalidate_timer.setInterval(400)
         self._revalidate_timer.timeout.connect(lambda: self.run_validation(quiet=True))
 
         # ---- central tabs; tab 1 is the validation grid ----

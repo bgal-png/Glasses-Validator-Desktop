@@ -137,6 +137,93 @@ def fix_spacing(user_df: pd.DataFrame):
     return df, changes
 
 
+# The master is an 82k-row snapshot that is loaded once and never edited, but
+# cleaning it and exploding every mapped column into a vocabulary costs seconds.
+# Re-validating after an edit only changes the *user* file, so that work is
+# memoised against the master object it came from. Two entries is enough to
+# cover a "Refresh data" swap without holding old snapshots alive forever.
+_MASTER_CACHE: dict = {}
+
+
+def _prepared_master(master_df: pd.DataFrame):
+    """(cleaned+filtered master, per-column vocab cache) for this master."""
+    key = id(master_df)
+    hit = _MASTER_CACHE.get(key)
+    if hit is not None and hit["src"] is master_df:
+        return hit["prepared"], hit["vocab"]
+    prepared = filter_glasses(clean_headers(master_df))
+    entry = {"src": master_df, "prepared": prepared, "vocab": _load_disk_vocab()}
+    if len(_MASTER_CACHE) >= 2:
+        _MASTER_CACHE.clear()
+    _MASTER_CACHE[key] = entry
+    return prepared, entry["vocab"]
+
+
+def _vocab_disk_path():
+    """Where the built vocabulary is parked between runs. Keyed by the master's
+    ETag so a refreshed master rebuilds it, and by the app version so a change
+    to EXTRA_ALLOWED_VALUES or the parsing rules is never served from a stale
+    file. Returns None when the key can't be determined — then we just rebuild."""
+    try:
+        import hashlib
+        import remote
+        from version import __version__
+        etag_file = remote._etag_path(remote.cache_dir() / "master_clean.xlsx")
+        tag = etag_file.read_text().strip() if etag_file.exists() else ""
+        if not tag:
+            return None
+        key = hashlib.sha1(f"{tag}|{__version__}".encode()).hexdigest()[:16]
+        return remote.cache_dir() / f"vocab_{key}.pkl"
+    except Exception:
+        return None
+
+
+def _load_disk_vocab():
+    path = _vocab_disk_path()
+    if path is None or not path.exists():
+        return {}
+    try:
+        import pickle
+        with open(path, "rb") as fh:
+            got = pickle.load(fh)
+        return got if isinstance(got, dict) else {}
+    except Exception:
+        return {}   # corrupt or written by another version — rebuild instead
+
+
+def _save_disk_vocab(vocab: dict):
+    path = _vocab_disk_path()
+    if path is None:
+        return
+    try:
+        import pickle
+        for old in path.parent.glob("vocab_*.pkl"):
+            if old != path:
+                old.unlink(missing_ok=True)   # drop entries for older masters
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "wb") as fh:
+            pickle.dump(vocab, fh)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def _column_vocab(prepared: pd.DataFrame, m_col: str) -> dict:
+    """Case-insensitive {lowercase: canonical casing} for one master column."""
+    raw = prepared[m_col].dropna().astype(str)
+    exploded = raw.str.split(r",+").explode().str.strip()
+    mapping = {}
+    for v in exploded:
+        if v and v.lower() not in mapping:
+            mapping[v.lower()] = v  # first-seen casing wins
+    # Accept values we know are valid but that the master snapshot lacks.
+    for kw, extras in EXTRA_ALLOWED_VALUES.items():
+        if kw.lower() in m_col.lower():
+            for v in extras:
+                mapping.setdefault(v.lower(), v)
+    return mapping
+
+
 def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
              check_rules: bool = True, flag_undecided: bool = False,
              private_params: dict | None = None) -> dict:
@@ -149,8 +236,7 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
       counts      : {empty, meta_format, whitespace, invalid, case_mismatch, total}
     """
     user_df = clean_headers(user_df)
-    master_df = clean_headers(master_df)
-    master_df = filter_glasses(master_df)
+    master_df, vocab_cache = _prepared_master(master_df)
 
     user_cols = list(user_df.columns)
     master_cols = list(master_df.columns)
@@ -182,19 +268,14 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
 
     # ---- Build case-insensitive master vocab per mapped column ----
     valid_values_ci = {}
+    built = False
     for m_col in active_map.keys():
-        raw = master_df[m_col].dropna().astype(str)
-        exploded = raw.str.split(r",+").explode().str.strip()
-        mapping = {}
-        for v in exploded:
-            if v and v.lower() not in mapping:
-                mapping[v.lower()] = v  # first-seen casing wins
-        # Accept values we know are valid but that the master snapshot lacks.
-        for kw, extras in EXTRA_ALLOWED_VALUES.items():
-            if kw.lower() in m_col.lower():
-                for v in extras:
-                    mapping.setdefault(v.lower(), v)
-        valid_values_ci[m_col] = mapping
+        if m_col not in vocab_cache:
+            vocab_cache[m_col] = _column_vocab(master_df, m_col)
+            built = True
+        valid_values_ci[m_col] = vocab_cache[m_col]
+    if built:
+        _save_disk_vocab(vocab_cache)
 
     cell_issues: dict = {}
     issues: list = []
