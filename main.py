@@ -191,6 +191,10 @@ class MainWindow(QMainWindow):
         self.lbl_cell.setWordWrap(True)
         self.lbl_cell.setTextFormat(Qt.RichText)
         cl.addWidget(self.lbl_cell)
+        self.btn_fix = QPushButton("✔ Correct to expected value")
+        self.btn_fix.setVisible(False)
+        self.btn_fix.clicked.connect(self._fix_selected_cell)
+        cl.addWidget(self.btn_fix)
         lay.addWidget(self.grp_cell)
 
         # Summary
@@ -392,6 +396,8 @@ class MainWindow(QMainWindow):
     def _on_cell_selected(self, current, previous):
         if self.model is None or not current.isValid():
             self.lbl_cell.setText("Click a highlighted cell to see its issue.")
+            self.btn_fix.setVisible(False)
+            self._pending_fix = None
             return
         src = self.proxy.mapToSource(current)
         cols = list(self.model.dataframe().columns)
@@ -413,6 +419,23 @@ class MainWindow(QMainWindow):
                     html.append(f"<b>Expected:</b> {i['expected']}")
                 html.append("</div>")
         self.lbl_cell.setText("<br>".join(html))
+
+        # Offer a one-click correction when the cell has exactly one right answer.
+        fixes = self.model.fixes_at(src.row(), col_name)
+        if fixes:
+            self._pending_fix = (src.row(), col_name, fixes[0]["fix"])
+            shown = fixes[0]["fix"] if len(fixes[0]["fix"]) <= 30 else fixes[0]["fix"][:30] + "…"
+            self.btn_fix.setText(f'✔ Correct to "{shown}"')
+            self.btn_fix.setVisible(True)
+        else:
+            self._pending_fix = None
+            self.btn_fix.setVisible(False)
+
+    def _fix_selected_cell(self):
+        if not getattr(self, "_pending_fix", None):
+            return
+        row, col, value = self._pending_fix
+        self._apply_single_fix(row, col, value)
 
     def jump_next_issue(self):
         if not self._issue_cells or self.model is None:
@@ -489,11 +512,57 @@ class MainWindow(QMainWindow):
             return
         rows = self._selected_source_rows()
         menu = QMenu(self)
+
+        # Corrections for the cell under the cursor (amber warnings only).
+        idx = self.table.indexAt(pos)
+        if idx.isValid():
+            src = self.proxy.mapToSource(idx)
+            cols = list(self.model.dataframe().columns)
+            col_name = cols[src.column()]
+            fixes = self.model.fixes_at(src.row(), col_name)
+            for i in fixes:
+                shown = i["fix"] if len(i["fix"]) <= 45 else i["fix"][:45] + "…"
+                act = menu.addAction(f'✔ Correct to "{shown}"')
+                act.triggered.connect(
+                    lambda _c=False, r=src.row(), c=col_name, v=i["fix"]:
+                    self._apply_single_fix(r, c, v))
+            if fixes:
+                # Same issue type across the whole sheet, in one go.
+                itype = fixes[0]["type"]
+                same = self.model.correctable_cells(itype)
+                if len(same) > 1:
+                    label = fixes[0]["message"].split(":")[0]
+                    act_all = menu.addAction(
+                        f"✔ Correct all {len(same)} cells like this ({label})")
+                    act_all.triggered.connect(
+                        lambda _c=False, t=itype: self._apply_bulk_fix(t))
+                menu.addSeparator()
+
         act = menu.addAction(f"🗑 Delete {len(rows)} selected row(s)" if rows
                              else "🗑 Delete selected row(s)")
         act.setEnabled(bool(rows))
         act.triggered.connect(self.delete_selected_rows)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _apply_single_fix(self, row, col_name, value):
+        if self.model.apply_fix(row, col_name, value):
+            self._dirty = True
+            self.statusBar().showMessage(
+                f"Corrected row {row + 2} · {col_name} → {value}", 6000)
+            self.run_validation()
+
+    def _apply_bulk_fix(self, issue_type):
+        cells = self.model.correctable_cells(issue_type)
+        if not cells:
+            return
+        if QMessageBox.question(
+                self, "Correct cells",
+                f"Apply the expected value to {len(cells)} cell(s)?") != QMessageBox.Yes:
+            return
+        n = sum(1 for r, c, v in cells if self.model.apply_fix(r, c, v))
+        self._dirty = True
+        self.statusBar().showMessage(f"Corrected {n} cell(s) — re-validating…", 6000)
+        self.run_validation()
 
     def delete_selected_rows(self):
         if self.model is None:

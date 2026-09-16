@@ -51,6 +51,9 @@ class ValidationTableModel(QAbstractTableModel):
                 lines.append(f"• {i['message']}")
                 if i.get("expected"):
                     lines.append(f"    Expected: {i['expected']}")
+            if any(i.get("fix") is not None for i in issues):
+                lines.append("")
+                lines.append("Right-click to correct this cell.")
             return "\n".join(lines)
         return None
 
@@ -101,6 +104,41 @@ class ValidationTableModel(QAbstractTableModel):
     # ---- helpers used by the UI ----
     def issues_at(self, row, col_name):
         return self._issues_at(row, col_name)
+
+    def fixes_at(self, row, col_name):
+        """Correctable issues on a cell, de-duplicated by the value they would
+        write. Only the amber warnings carry a fix — red errors have no single
+        correct answer."""
+        out, seen = [], set()
+        for i in self._issues_at(row, col_name):
+            fix = i.get("fix")
+            if fix is None or fix in seen:
+                continue
+            seen.add(fix)
+            out.append(i)
+        return out
+
+    def correctable_cells(self, issue_type=None):
+        """[(row, col_name, fix)] for every cell that can be auto-corrected,
+        optionally restricted to one issue type."""
+        out = []
+        for (row, col), issues in self._cell_issues.items():
+            for i in issues:
+                if i.get("fix") is None:
+                    continue
+                if issue_type and i["type"] != issue_type:
+                    continue
+                out.append((row, col, i["fix"]))
+                break
+        return out
+
+    def apply_fix(self, row, col_name, value):
+        """Write a corrected value into a cell by name."""
+        try:
+            col = self._cols.index(col_name)
+        except ValueError:
+            return False
+        return self.setData(self.index(row, col), value, Qt.EditRole)
 
     def row_has_issue(self, row):
         return row in self._rows_with_issues

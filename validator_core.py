@@ -203,12 +203,17 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
         expected = extra.get("Expected")
         if expected is None and extra.get("Allowed"):
             expected = "e.g. " + ", ".join(extra["Allowed"])
+        # "fix" is the complete corrected cell value, present only where there
+        # is exactly one right answer (the amber warnings). Red errors —
+        # missing required values, invalid content, duplicates — have no single
+        # correct value, so they are deliberately left without one.
         cell_issues.setdefault((row_idx, col), []).append({
             "type": itype,
             "severity": severity,
             "message": message,
             "value": extra.get("Value"),
             "expected": expected,
+            "fix": extra.get("Fix"),
         })
         rec = {"Row": row_idx + 2, "Column": col, "Error": message, "type": itype}
         rec.update(extra)
@@ -282,8 +287,11 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
             if re.search(WS_CHARS + r"{2,}", raw_val): ws.append("Double spaces")
             if re.search(r"\|\s|\s\|", raw_val): ws.append("Space around separator")
             if " " in raw_val: ws.append("Non-breaking space (NBSP)")
+            cleaned = fix_spacing_value(raw_val)
             for w in ws:
-                add(idx, u_col, "whitespace", "warning", w, Value=w, Content=_visible_ws(raw_val))
+                add(idx, u_col, "whitespace", "warning", w, Value=w,
+                    Content=_visible_ws(raw_val),
+                    Fix=(cleaned if cleaned != raw_val else None))
 
     # ---- Content validation (mapped columns) ----
     for idx, row in user_df.iterrows():
@@ -300,9 +308,15 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
                         f"Invalid value: {p}", Value=p, Content=raw_val,
                         Allowed=list(ci_map.values())[:3])
                 elif p != ci_map[p.lower()]:
+                    correct = ci_map[p.lower()]
+                    # The cell may hold several pipe-separated values; swap just
+                    # the offending part and keep the rest as it is.
+                    fixed_parts = [correct if q.strip() == p else q
+                                   for q in raw_val.strip().split("|")]
                     add(idx, u_col, "case_mismatch", "warning",
-                        f"Case mismatch: '{p}' should be '{ci_map[p.lower()]}'",
-                        Value=p, Content=raw_val, Expected=ci_map[p.lower()])
+                        f"Case mismatch: '{p}' should be '{correct}'",
+                        Value=p, Content=raw_val, Expected=correct,
+                        Fix="|".join(fixed_parts))
 
     # ---- Fill-rule checks (ported Excel macros) ----
     if check_rules:
@@ -312,11 +326,11 @@ def validate(user_df: pd.DataFrame, master_df: pd.DataFrame,
                 if r["status"] == "fill":
                     add(r["row"], r["column"], "rule_fill", "warning",
                         f"Empty — {r['label']} rule can fill this",
-                        Value="", Expected=r["derived"])
+                        Value="", Expected=r["derived"], Fix=r["derived"])
                 elif r["status"] == "differs":
                     add(r["row"], r["column"], "rule_differs", "warning",
                         f"Differs from {r['label']} rule",
-                        Value=r["current"], Expected=r["derived"])
+                        Value=r["current"], Expected=r["derived"], Fix=r["derived"])
                 elif r["status"] == "undecided" and flag_undecided:
                     add(r["row"], r["column"], "rule_undecided", "warning",
                         f"Empty — {r['label']} rule cannot determine a value",
