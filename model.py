@@ -133,12 +133,28 @@ class ValidationTableModel(QAbstractTableModel):
         return out
 
     def apply_fix(self, row, col_name, value):
-        """Write a corrected value into a cell by name."""
+        """Write a corrected value into a cell by name. Returns the issues that
+        were cleared from the cell (empty list if nothing changed), so the
+        caller can update its counters without a full re-validation."""
         try:
             col = self._cols.index(col_name)
         except ValueError:
-            return False
-        return self.setData(self.index(row, col), value, Qt.EditRole)
+            return []
+        had = list(self._issues_at(row, col_name))
+        if not self.setData(self.index(row, col), value, Qt.EditRole):
+            return []
+        return had
+
+    def set_issues(self, cell_issues):
+        """Swap in a fresh set of highlights without rebuilding the model, so
+        the view keeps its scroll position, selection and column widths."""
+        self._cell_issues = cell_issues or {}
+        self._rows_with_issues = {r for (r, _c) in self._cell_issues}
+        if self.rowCount() and self.columnCount():
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(self.rowCount() - 1, self.columnCount() - 1),
+            )
 
     def row_has_issue(self, row):
         return row in self._rows_with_issues

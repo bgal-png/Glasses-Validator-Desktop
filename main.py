@@ -10,7 +10,8 @@ import os
 import sys
 import pandas as pd
 
-from PySide6.QtCore import Qt, QThread, Signal, QObject, QModelIndex, QSettings
+from PySide6.QtCore import (Qt, QThread, Signal, QObject, QModelIndex,
+                            QSettings, QTimer)
 from PySide6.QtGui import QAction, QColor, QPalette, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTableView, QDockWidget, QWidget, QVBoxLayout,
@@ -91,6 +92,14 @@ class MainWindow(QMainWindow):
         self._current_name = None
         self.name_master = None
         self.settings = QSettings("Alensa", "GlassesValidator")
+
+        # Corrections apply instantly; a full re-validation is worth doing
+        # afterwards (a fix can uncover a second issue on the same cell) but
+        # not once per click, so it is debounced into a single background pass.
+        self._revalidate_timer = QTimer(self)
+        self._revalidate_timer.setSingleShot(True)
+        self._revalidate_timer.setInterval(900)
+        self._revalidate_timer.timeout.connect(lambda: self.run_validation(quiet=True))
 
         # ---- central tabs; tab 1 is the validation grid ----
         self.table = QTableView()
@@ -340,24 +349,48 @@ class MainWindow(QMainWindow):
         self._push_dataframe_to_tabs()
         self.run_validation()
 
-    def run_validation(self):
+    def run_validation(self, quiet=False):
+        """quiet=True is the background pass after an edit: no dialogs, and the
+        view is refreshed in place instead of rebuilt."""
         if self.user_df is None:
+            if quiet:
+                return
             QMessageBox.information(self, "No file", "Open an Excel file first."); return
         if self.master_df is None:
+            if quiet:
+                return
             QMessageBox.information(self, "Please wait", "Reference data is still loading."); return
-        self._set_busy(True, "Validating…")
+        if self._worker is not None and self._worker.isRunning():
+            # Let the running pass finish, then fold this request into the next.
+            self._revalidate_timer.start()
+            return
+        self._set_busy(True, "Re-checking…" if quiet else "Validating…")
         udf, mdf = self.user_df, self.master_df
         use_rules = self.chk_rules.isChecked()
         flag_und = self.chk_undecided.isChecked()
         self._worker = Worker(lambda: vc.validate(udf, mdf, check_rules=use_rules,
                                                   flag_undecided=flag_und))
-        self._worker.done.connect(self._on_validated)
+        self._worker.done.connect(lambda r, q=quiet: self._on_validated(r, quiet=q))
         self._worker.failed.connect(lambda e: (self._set_busy(False), self._error("Validation failed", e)))
         self._worker.start()
 
-    def _on_validated(self, result):
+    def _on_validated(self, result, quiet=False):
         self._set_busy(False)
         self.result = result
+        if quiet and self.model is not None                 and self.model.dataframe() is self.user_df                 and self.model.rowCount() == len(self.user_df):
+            # Same grid, new highlights: swapping them keeps the scroll
+            # position, the selection and the measured column widths, which is
+            # what made a single correction feel like a full reload.
+            self.model.set_issues(result["cell_issues"])
+            if self.chk_only.isChecked():
+                self.proxy.invalidateFilter()   # rows may have become clean
+            self._issue_cells = sorted(result["cell_issues"].keys())
+            self._issue_pos = -1
+            self._update_summary(result)
+            self._on_cell_selected(self.table.currentIndex(), None)
+            self.statusBar().showMessage(
+                f"{result['counts']['total']} issue(s) remaining.", 5000)
+            return
         self.model = ValidationTableModel(self.user_df, result["cell_issues"])
         # The model edits this DataFrame in place, so keep the same object.
         self.user_df = self.model.dataframe()
@@ -544,12 +577,37 @@ class MainWindow(QMainWindow):
         act.triggered.connect(self.delete_selected_rows)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    # Which summary counter each issue type feeds, so a correction can update
+    # the panel immediately instead of waiting for the next validation pass.
+    _COUNT_KEY = {
+        "empty_required": "empty", "empty_required_sun": "empty",
+        "invalid_content": "invalid",
+    }
+
+    def _discount_issues(self, issues):
+        """Subtract cleared issues from the summary counters."""
+        if not self.result:
+            return
+        c = self.result["counts"]
+        for i in issues:
+            key = self._COUNT_KEY.get(i["type"], i["type"])
+            if key in c:
+                c[key] = max(0, c[key] - 1)
+            c["total"] = max(0, c["total"] - 1)
+        self._update_summary(self.result)
+
     def _apply_single_fix(self, row, col_name, value):
-        if self.model.apply_fix(row, col_name, value):
-            self._dirty = True
-            self.statusBar().showMessage(
-                f"Corrected row {row + 2} · {col_name} → {value}", 6000)
-            self.run_validation()
+        cleared = self.model.apply_fix(row, col_name, value)
+        if not cleared:
+            return
+        # The cell repaints straight away; the full re-check is debounced so
+        # correcting several cells in a row costs one pass, not one each.
+        self._dirty = True
+        self._discount_issues(cleared)
+        self.statusBar().showMessage(
+            f"Corrected row {row + 2} · {col_name} → {value}", 6000)
+        self._on_cell_selected(self.table.currentIndex(), None)
+        self._revalidate_timer.start()
 
     def _apply_bulk_fix(self, issue_type):
         cells = self.model.correctable_cells(issue_type)
@@ -559,10 +617,17 @@ class MainWindow(QMainWindow):
                 self, "Correct cells",
                 f"Apply the expected value to {len(cells)} cell(s)?") != QMessageBox.Yes:
             return
-        n = sum(1 for r, c, v in cells if self.model.apply_fix(r, c, v))
+        cleared, n = [], 0
+        for r, c, v in cells:
+            got = self.model.apply_fix(r, c, v)
+            if got:
+                cleared.extend(got)
+                n += 1
         self._dirty = True
-        self.statusBar().showMessage(f"Corrected {n} cell(s) — re-validating…", 6000)
-        self.run_validation()
+        self._discount_issues(cleared)
+        self.statusBar().showMessage(f"Corrected {n} cell(s).", 6000)
+        self._on_cell_selected(self.table.currentIndex(), None)
+        self._revalidate_timer.start()
 
     def delete_selected_rows(self):
         if self.model is None:
